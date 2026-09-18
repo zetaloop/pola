@@ -146,6 +146,10 @@ impl AppState {
                         state.schedule_next();
                         None
                     }
+                    WM_THEMECHANGED => {
+                        state.appearance_changed();
+                        None
+                    }
                     WM_TIMECHANGE => {
                         state.resume_schedule();
                         None
