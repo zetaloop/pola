@@ -125,6 +125,7 @@ impl AppState {
                 match message {
                     WM_SETTINGCHANGE => {
                         state.appearance_changed();
+                        state.schedule_next();
                         None
                     }
                     WM_TIMECHANGE => {
