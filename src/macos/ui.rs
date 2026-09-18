@@ -5,8 +5,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSButton, NSFont, NSImage, NSLayoutAttribute,
-    NSLayoutConstraint, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask,
+    NSLayoutConstraint, NSScrollView, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation,
+    NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSString};
 
@@ -68,6 +68,31 @@ pub fn mount(parent: &NSView, child: &NSView, margin: f64) {
             .bottomAnchor()
             .constraintEqualToAnchor_constant(&parent.bottomAnchor(), -margin),
     ]));
+}
+
+pub fn scroll(mtm: MainThreadMarker, content: &NSView, height: f64) -> Retained<NSScrollView> {
+    let scroll = NSScrollView::new(mtm);
+    scroll.setHasVerticalScroller(true);
+    scroll.setDrawsBackground(false);
+    scroll
+        .heightAnchor()
+        .constraintEqualToConstant(height)
+        .setActive(true);
+    scroll.setDocumentView(Some(content));
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    let clip = scroll.contentView();
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor(&clip.leadingAnchor()),
+        content
+            .topAnchor()
+            .constraintEqualToAnchor(&clip.topAnchor()),
+        content
+            .widthAnchor()
+            .constraintEqualToAnchor(&clip.widthAnchor()),
+    ]));
+    scroll
 }
 
 pub fn label(mtm: MainThreadMarker, text: &str, size: f64) -> Retained<NSTextField> {

@@ -34,6 +34,8 @@ use crate::{
     shortcut::Shortcut,
 };
 
+mod file;
+mod profile;
 mod settings;
 mod ui;
 mod window;
@@ -63,6 +65,7 @@ struct DelegateIvars {
     status_item: OnceCell<Retained<NSStatusItem>>,
     settings: OnceCell<settings::Settings>,
     window: OnceCell<window::Window>,
+    profile: RefCell<Option<Retained<profile::Editor>>>,
     appearance_observed: Cell<bool>,
 }
 
@@ -132,7 +135,11 @@ define_class!(
 
         #[unsafe(method(editAppearance:))]
         fn edit_appearance(&self, sender: &NSButton) {
-            self.open_settings(sender.tag() + 2);
+            let mode = if sender.tag() == 0 { Mode::Light } else { Mode::Dark };
+            let profile = self.ivars().state.borrow().config.profile(mode).clone();
+            let editor = profile::Editor::new(self.mtm(), self, mode, profile);
+            editor.show(&self.ivars().window.get().unwrap().window);
+            *self.ivars().profile.borrow_mut() = Some(editor);
         }
 
         #[unsafe(method(showSchedule:))]
@@ -180,84 +187,12 @@ define_class!(
             }
         }
 
-        #[unsafe(method(browseLight:))]
-        fn browse_light(&self, _sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.browse(Mode::Light);
-            }
-        }
-
-        #[unsafe(method(browseDark:))]
-        fn browse_dark(&self, _sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.browse(Mode::Dark);
-            }
-        }
-
-        #[unsafe(method(addLightCommand:))]
-        fn add_light_command(&self, _sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.add_command(self, Mode::Light, None);
-            }
-        }
-
-        #[unsafe(method(addDarkCommand:))]
-        fn add_dark_command(&self, _sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.add_command(self, Mode::Dark, None);
-            }
-        }
-
-        #[unsafe(method(removeLightCommand:))]
-        fn remove_light_command(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.remove_command(Mode::Light, sender.tag() as usize);
-            }
-        }
-
-        #[unsafe(method(removeDarkCommand:))]
-        fn remove_dark_command(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.remove_command(Mode::Dark, sender.tag() as usize);
-            }
-        }
-
-        #[unsafe(method(addLightArgument:))]
-        fn add_light_argument(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.add_argument(self, Mode::Light, sender.tag() as usize);
-            }
-        }
-
-        #[unsafe(method(addDarkArgument:))]
-        fn add_dark_argument(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.add_argument(self, Mode::Dark, sender.tag() as usize);
-            }
-        }
-
-        #[unsafe(method(removeLightArgument:))]
-        fn remove_light_argument(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                let (command, argument) = settings::unpack(sender.tag());
-                settings.remove_argument(Mode::Light, command, argument);
-            }
-        }
-
-        #[unsafe(method(removeDarkArgument:))]
-        fn remove_dark_argument(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                let (command, argument) = settings::unpack(sender.tag());
-                settings.remove_argument(Mode::Dark, command, argument);
-            }
-        }
-
         #[unsafe(method(saveSettings:))]
         fn save_settings(&self, _sender: &NSObject) {
             let Some(settings) = self.ivars().settings.get() else {
                 return;
             };
-            let config = match settings.config() {
+            let config = match settings.config(&self.ivars().state.borrow().config) {
                 Ok(config) => config,
                 Err(error) => {
                     settings.show_error(&error.to_string());
@@ -358,6 +293,7 @@ impl Delegate {
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
             window: OnceCell::new(),
+            profile: RefCell::new(None),
             appearance_observed: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
@@ -615,6 +551,25 @@ impl Delegate {
         if !errors.is_empty() {
             show_error(self.mtm(), "Could not apply appearance", &errors.join("\n"));
         }
+    }
+
+    fn save_profile(&self, mode: Mode, profile: Profile) -> Result<(), String> {
+        let mut config = self.ivars().state.borrow().config.clone();
+        if config.profile(mode) == &profile {
+            return Ok(());
+        }
+        match mode {
+            Mode::Light => config.light = profile,
+            Mode::Dark => config.dark = profile,
+        }
+        config.save().map_err(|error| error.to_string())?;
+        self.ivars().state.borrow_mut().config = config;
+        if self.system_mode() == mode {
+            self.ivars().state.borrow_mut().applied = None;
+            self.apply(mode);
+        }
+        self.update_window();
+        Ok(())
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
