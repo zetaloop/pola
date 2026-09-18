@@ -168,33 +168,46 @@ impl AppState {
     }
 
     fn show_menu(self: &Rc<Self>, position: windows_notifyicon::Point) {
-        let mode = self.system_mode();
-        let target = match mode {
-            Mode::Light => "Dark",
-            Mode::Dark => "Light",
-        };
+        let target = self.system_mode().toggle();
+        let toggle = format!("Switch to {target}");
         let schedule = if self.config.borrow().schedule.enabled {
             "Disable schedule"
         } else {
             "Enable schedule"
         };
+        let next = self
+            .config
+            .borrow()
+            .schedule
+            .next(&Zoned::now())
+            .map(|event| format!("Next: {} → {}", event.at.strftime("%a %H:%M"), event.mode))
+            .unwrap_or_else(|| "Next: —".into());
 
         let state = Rc::clone(self);
+        let toggle_action = toggle.clone();
         let menu = Menu::new(
             [
-                MenuItem::item("toggle", format!("Switch to {target}")),
-                MenuItem::item("schedule", schedule),
+                MenuItem::disabled("next", next),
                 MenuItem::separator("separator-1"),
-                MenuItem::item("settings", "Settings…"),
+                MenuItem::item("toggle", toggle),
+                MenuItem::item("schedule", schedule),
                 MenuItem::separator("separator-2"),
+                MenuItem::item("settings", "Settings…"),
+                MenuItem::separator("separator-3"),
                 MenuItem::item("exit", "Quit"),
             ],
-            move |item: String| match item.as_str() {
-                "toggle" => state.toggle(),
-                "schedule" => state.toggle_schedule(),
-                "settings" => state.open_settings(),
-                "exit" => state.exit(),
-                _ => {}
+            move |label: String| {
+                if label == toggle_action {
+                    state.toggle();
+                } else if label == schedule {
+                    state.toggle_schedule();
+                } else {
+                    match label.as_str() {
+                        "Settings…" => state.open_settings(),
+                        "Quit" => state.exit(),
+                        _ => {}
+                    }
+                }
             },
         );
 

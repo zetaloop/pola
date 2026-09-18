@@ -442,7 +442,7 @@ impl Delegate {
                 .config
                 .schedule
                 .next(&Zoned::now())
-                .map(|event| format!("Next: {} → {:?}", event.at.strftime("%a %H:%M"), event.mode))
+                .map(|event| format!("Next: {} → {}", event.at.strftime("%a %H:%M"), event.mode))
                 .unwrap_or_else(|| "Next: —".into());
             items.objectAtIndex(1).setTitle(&NSString::from_str(&next));
 
