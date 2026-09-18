@@ -197,6 +197,10 @@ impl Component for Settings {
     }
 
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+        if !matches!(&message, Message::Activate | Message::Save) {
+            self.status.clear();
+        }
+
         match message {
             Message::Activate => {
                 if !context.window().request_activate() {
