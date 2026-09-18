@@ -192,8 +192,12 @@ define_class!(
             let Some(settings) = self.ivars().settings.get() else {
                 return;
             };
-            let Ok(config) = settings.config() else {
-                return;
+            let config = match settings.config() {
+                Ok(config) => config,
+                Err(error) => {
+                    settings.show_error(&error.to_string());
+                    return;
+                }
             };
             let old = self.ivars().state.borrow().config.clone();
             let old_launch = launch_at_login();
