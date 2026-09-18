@@ -1,9 +1,6 @@
-use std::{
-    cell::{OnceCell, RefCell},
-    str::FromStr,
-};
+use std::cell::{OnceCell, RefCell};
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use jiff::Zoned;
 use objc2::{
     AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, rc::Retained,
@@ -25,6 +22,7 @@ use crate::{
     config::{Config, Profile},
     mode::Mode,
     schedule::Event,
+    shortcut::Shortcut,
 };
 
 mod settings;
@@ -34,8 +32,7 @@ struct State {
     applied: Option<Mode>,
     timer: Option<Retained<NSTimer>>,
     next: Option<Event>,
-    hotkey_manager: Option<GlobalHotKeyManager>,
-    hotkey: Option<HotKey>,
+    shortcut: Shortcut,
 }
 
 impl State {
@@ -45,8 +42,7 @@ impl State {
             applied: None,
             timer: None,
             next: None,
-            hotkey_manager: None,
-            hotkey: None,
+            shortcut: Shortcut::default(),
         }
     }
 }
@@ -553,35 +549,7 @@ impl Delegate {
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let hotkey = HotKey::from_str(text)?;
-        let mut state = self.ivars().state.borrow_mut();
-
-        if state.hotkey == Some(hotkey) {
-            return Ok(());
-        }
-
-        let manager = match state.hotkey_manager.take() {
-            Some(manager) => manager,
-            None => GlobalHotKeyManager::new()?,
-        };
-
-        let old = state.hotkey.take();
-        if let Some(old) = old {
-            manager.unregister(old)?;
-        }
-
-        if let Err(error) = manager.register(hotkey) {
-            if let Some(old) = old {
-                let _ = manager.register(old);
-            }
-            state.hotkey = old;
-            state.hotkey_manager = Some(manager);
-            return Err(error.into());
-        }
-
-        state.hotkey = Some(hotkey);
-        state.hotkey_manager = Some(manager);
-        Ok(())
+        self.ivars().state.borrow_mut().shortcut.register(text)
     }
 
     fn schedule_next(&self) {
@@ -700,12 +668,7 @@ pub fn run() {
         }
 
         let delegate = unsafe { &*(address as *const Delegate) };
-        let matches = delegate
-            .ivars()
-            .state
-            .borrow()
-            .hotkey
-            .is_some_and(|hotkey| hotkey.id() == event.id);
+        let matches = delegate.ivars().state.borrow().shortcut.matches(event.id);
         if matches {
             delegate.toggle();
         }

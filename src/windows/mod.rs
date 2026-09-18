@@ -3,10 +3,9 @@ use std::{
     os::windows::ffi::OsStrExt,
     path::PathBuf,
     rc::Rc,
-    str::FromStr,
 };
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use jiff::Zoned;
 use windows::{
     Win32::{
@@ -38,6 +37,7 @@ use crate::{
     config::{Config, Profile},
     mode::Mode,
     schedule::Event,
+    shortcut::Shortcut,
 };
 
 mod settings;
@@ -73,8 +73,7 @@ pub(crate) struct AppState {
     icon: RefCell<Option<NotifyIcon>>,
     message_window: RefCell<Option<Window>>,
     settings: RefCell<OpenWindow>,
-    hotkey_manager: RefCell<Option<GlobalHotKeyManager>>,
-    hotkey: Cell<Option<HotKey>>,
+    shortcut: RefCell<Shortcut>,
 }
 
 impl AppState {
@@ -88,8 +87,7 @@ impl AppState {
             icon: RefCell::new(None),
             message_window: RefCell::new(None),
             settings: RefCell::new(OpenWindow::Closed),
-            hotkey_manager: RefCell::new(None),
-            hotkey: Cell::new(None),
+            shortcut: RefCell::new(Shortcut::default()),
         })
     }
 
@@ -123,11 +121,7 @@ impl AppState {
                 return;
             }
             let state = unsafe { &*(address as *const AppState) };
-            if state
-                .hotkey
-                .get()
-                .is_some_and(|hotkey| hotkey.id() == event.id)
-            {
+            if state.shortcut.borrow().matches(event.id) {
                 state.toggle();
             }
         }));
@@ -435,34 +429,7 @@ impl AppState {
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let hotkey = HotKey::from_str(text)?;
-        if self.hotkey.get() == Some(hotkey) {
-            return Ok(());
-        }
-
-        let manager = self
-            .hotkey_manager
-            .borrow_mut()
-            .take()
-            .unwrap_or(GlobalHotKeyManager::new()?);
-        let old = self.hotkey.take();
-
-        if let Some(old) = old {
-            manager.unregister(old)?;
-        }
-
-        if let Err(error) = manager.register(hotkey) {
-            if let Some(old) = old {
-                let _ = manager.register(old);
-            }
-            self.hotkey.set(old);
-            *self.hotkey_manager.borrow_mut() = Some(manager);
-            return Err(error.into());
-        }
-
-        self.hotkey.set(Some(hotkey));
-        *self.hotkey_manager.borrow_mut() = Some(manager);
-        Ok(())
+        self.shortcut.borrow_mut().register(text)
     }
 
     fn schedule_fired(&self) {
