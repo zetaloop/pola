@@ -250,7 +250,7 @@ define_class!(
 
         #[unsafe(method(clockChanged:))]
         fn clock_changed(&self, _notification: &NSNotification) {
-            self.reconcile_schedule();
+            self.resume_schedule();
         }
 
         #[unsafe(method(didWake:))]
@@ -601,14 +601,6 @@ impl Delegate {
             .is_some_and(|event| event.at.timestamp() <= now.timestamp());
 
         if missed && let Some(mode) = self.ivars().state.borrow().config.schedule.current(&now) {
-            self.select(mode);
-        }
-        self.schedule_next();
-    }
-
-    fn reconcile_schedule(&self) {
-        let now = Zoned::now();
-        if let Some(mode) = self.ivars().state.borrow().config.schedule.current(&now) {
             self.select(mode);
         }
         self.schedule_next();

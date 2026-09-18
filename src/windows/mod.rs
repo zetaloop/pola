@@ -147,7 +147,7 @@ impl AppState {
                         None
                     }
                     WM_TIMECHANGE => {
-                        state.reconcile_schedule();
+                        state.resume_schedule();
                         None
                     }
                     WM_POWERBROADCAST if wparam as u32 == PBT_APMRESUMEAUTOMATIC => {
@@ -479,14 +479,6 @@ impl AppState {
             .is_some_and(|event| event.at.timestamp() <= now.timestamp());
 
         if missed && let Some(mode) = self.config.borrow().schedule.current(&now) {
-            self.select(mode);
-        }
-        self.schedule_next();
-    }
-
-    fn reconcile_schedule(&self) {
-        let now = Zoned::now();
-        if let Some(mode) = self.config.borrow().schedule.current(&now) {
             self.select(mode);
         }
         self.schedule_next();
