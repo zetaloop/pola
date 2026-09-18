@@ -74,10 +74,18 @@ pub struct Command {
 
 impl Command {
     pub fn run(&self) -> io::Result<()> {
-        let mut child = std::process::Command::new(&self.program)
-            .args(&self.args)
-            .spawn()?;
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.args);
 
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            use windows::Win32::System::Threading::CREATE_NO_WINDOW;
+
+            command.creation_flags(CREATE_NO_WINDOW.0);
+        }
+
+        let mut child = command.spawn()?;
         std::thread::spawn(move || {
             let _ = child.wait();
         });
