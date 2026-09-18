@@ -17,7 +17,8 @@ fn main() {
     fs::copy("assets/pola.ico", target.join("pola.ico"))
         .expect("failed to stage the notification icon");
 
-    if env::var("HOST").is_ok_and(|host| host.contains("windows")) {
+    #[cfg(windows)]
+    {
         windows_reactor_setup::as_self_contained();
 
         winresource::WindowsResource::new()
