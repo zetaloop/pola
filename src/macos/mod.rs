@@ -1,10 +1,16 @@
-use std::cell::{OnceCell, RefCell};
+use std::{
+    cell::{Cell, OnceCell, RefCell},
+    ffi::c_void,
+    ptr,
+};
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use jiff::Zoned;
 use objc2::{
-    AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, rc::Retained,
-    runtime::ProtocolObject, sel,
+    AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
+    sel,
 };
 use objc2_app_kit::{
     NSAlert, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
@@ -12,9 +18,10 @@ use objc2_app_kit::{
     NSStatusBar, NSStatusItem, NSWorkspace, NSWorkspaceDidWakeNotification,
 };
 use objc2_foundation::{
-    NSAppleScript, NSArray, NSDistributedNotificationCenter, NSNotification, NSNotificationCenter,
-    NSObject, NSObjectProtocol, NSString, NSSystemClockDidChangeNotification,
-    NSSystemTimeZoneDidChangeNotification, NSTimer, NSURL,
+    NSAppleScript, NSArray, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
+    NSNotification, NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration,
+    NSObjectProtocol, NSString, NSSystemClockDidChangeNotification,
+    NSSystemTimeZoneDidChangeNotification, NSTimer, NSURL, ns_string,
 };
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
@@ -51,6 +58,7 @@ struct DelegateIvars {
     state: RefCell<State>,
     status_item: OnceCell<Retained<NSStatusItem>>,
     settings: OnceCell<settings::Settings>,
+    appearance_observed: Cell<bool>,
 }
 
 define_class!(
@@ -246,8 +254,14 @@ define_class!(
             self.schedule_next();
         }
 
-        #[unsafe(method(appearanceChanged:))]
-        fn appearance_changed(&self, _notification: &NSNotification) {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn appearance_changed(
+            &self,
+            _key_path: Option<&NSString>,
+            _object: Option<&AnyObject>,
+            _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
+            _context: *mut c_void,
+        ) {
             self.apply(self.system_mode());
             self.update_menu();
         }
@@ -269,12 +283,24 @@ define_class!(
     }
 );
 
+impl Drop for Delegate {
+    fn drop(&mut self) {
+        if self.ivars().appearance_observed.get() {
+            unsafe {
+                NSApplication::sharedApplication(self.mtm())
+                    .removeObserver_forKeyPath(self, ns_string!("effectiveAppearance"));
+            }
+        }
+    }
+}
+
 impl Delegate {
     fn new(mtm: objc2_foundation::MainThreadMarker, config: Config) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             state: RefCell::new(State::new(config)),
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
+            appearance_observed: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
     }
@@ -313,16 +339,16 @@ impl Delegate {
     }
 
     fn observe_system(&self) {
-        let appearance = NSDistributedNotificationCenter::defaultCenter();
-        let appearance_name = NSString::from_str("AppleInterfaceThemeChangedNotification");
+        let app = NSApplication::sharedApplication(self.mtm());
         unsafe {
-            appearance.addObserver_selector_name_object(
+            app.addObserver_forKeyPath_options_context(
                 self,
-                sel!(appearanceChanged:),
-                Some(&appearance_name),
-                None,
+                ns_string!("effectiveAppearance"),
+                NSKeyValueObservingOptions::New,
+                ptr::null_mut(),
             );
         }
+        self.ivars().appearance_observed.set(true);
 
         let center = NSNotificationCenter::defaultCenter();
         unsafe {
