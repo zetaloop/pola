@@ -641,6 +641,7 @@ fn show_error(mtm: objc2_foundation::MainThreadMarker, title: &str, message: &st
 
 pub fn run() {
     let mtm = objc2_foundation::MainThreadMarker::new().expect("pola must run on the main thread");
+    let app = NSApplication::sharedApplication(mtm);
     let config = match Config::load() {
         Ok(config) => config,
         Err(error) => {
@@ -648,8 +649,6 @@ pub fn run() {
             return;
         }
     };
-
-    let app = NSApplication::sharedApplication(mtm);
     let delegate = Delegate::new(mtm, config);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
