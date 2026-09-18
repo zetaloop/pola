@@ -14,13 +14,15 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAlert, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSMenu, NSMenuItem, NSScreen,
-    NSStatusBar, NSStatusItem, NSWorkspace, NSWorkspaceDidWakeNotification,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSImage, NSMenu, NSMenuItem,
+    NSScreen, NSSegmentedControl, NSStatusBar, NSStatusItem, NSToolbar, NSToolbarDelegate,
+    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemIdentifier, NSWorkspace,
+    NSWorkspaceDidWakeNotification,
 };
 use objc2_foundation::{
-    NSAppleScript, NSArray, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
+    NSAppleScript, NSArray, NSData, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
     NSNotification, NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration,
-    NSObjectProtocol, NSString, NSSystemClockDidChangeNotification,
+    NSObjectProtocol, NSSize, NSString, NSSystemClockDidChangeNotification,
     NSSystemTimeZoneDidChangeNotification, NSTimer, NSURL, ns_string,
 };
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
@@ -33,6 +35,8 @@ use crate::{
 };
 
 mod settings;
+mod ui;
+mod window;
 
 struct State {
     config: Config,
@@ -58,6 +62,7 @@ struct DelegateIvars {
     state: RefCell<State>,
     status_item: OnceCell<Retained<NSStatusItem>>,
     settings: OnceCell<settings::Settings>,
+    window: OnceCell<window::Window>,
     appearance_observed: Cell<bool>,
 }
 
@@ -74,9 +79,67 @@ define_class!(
         fn did_finish_launching(&self, _notification: &NSNotification) {
             self.start();
         }
+
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
+            self.open_window();
+            true
+        }
+    }
+
+    unsafe impl NSToolbarDelegate for Delegate {
+        #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
+        fn toolbar_items(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSToolbarItemIdentifier>> {
+            NSArray::from_slice(&[
+                unsafe { NSToolbarFlexibleSpaceItemIdentifier },
+                ns_string!("schedule"),
+                ns_string!("settings"),
+            ])
+        }
+
+        #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
+        fn toolbar_item(&self, _toolbar: &NSToolbar, identifier: &NSToolbarItemIdentifier, _insert: bool) -> Option<Retained<NSToolbarItem>> {
+            let item = match identifier.to_string().as_str() {
+                "schedule" => Some(("Schedule", "calendar", sel!(showSchedule:))),
+                "settings" => Some(("Settings", "gearshape", sel!(showSettings:))),
+                _ => None,
+            };
+            item.map(|(title, symbol, action)| {
+                let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);
+                item.setLabel(&NSString::from_str(title));
+                item.setImage(Some(&ui::symbol(symbol, title)));
+                item.setBordered(true);
+                unsafe {
+                    item.setTarget(Some(self));
+                    item.setAction(Some(action));
+                }
+                item
+            })
+        }
     }
 
     impl Delegate {
+        #[unsafe(method(showWindow:))]
+        fn show_window(&self, _sender: &NSObject) {
+            self.open_window();
+        }
+
+        #[unsafe(method(selectMode:))]
+        fn select_mode(&self, sender: &NSSegmentedControl) {
+            self.select(if sender.selectedSegment() == 0 { Mode::Light } else { Mode::Dark });
+            self.update_window();
+        }
+
+        #[unsafe(method(editAppearance:))]
+        fn edit_appearance(&self, sender: &NSButton) {
+            self.open_settings(sender.tag() + 2);
+        }
+
+        #[unsafe(method(showSchedule:))]
+        fn show_schedule(&self, _sender: &NSObject) {
+            self.open_settings(1);
+        }
+
         #[unsafe(method(toggleMode:))]
         fn toggle_mode(&self, _sender: &NSObject) {
             self.toggle();
@@ -89,24 +152,18 @@ define_class!(
 
             if let Err(error) = config.save() {
                 show_error(self.mtm(), "Could not save settings", &error.to_string());
+                self.update_window();
                 return;
             }
 
             self.ivars().state.borrow_mut().config = config;
             self.schedule_next();
-            self.update_menu();
+            self.update_window();
         }
 
         #[unsafe(method(showSettings:))]
         fn show_settings(&self, _sender: &NSObject) {
-            let settings = self
-                .ivars()
-                .settings
-                .get_or_init(|| settings::Settings::new(self.mtm(), self));
-            if !settings.is_visible() {
-                settings.load(&self.ivars().state.borrow().config, self);
-            }
-            settings.show();
+            self.open_settings(0);
         }
 
         #[unsafe(method(addSchedule:))]
@@ -242,7 +299,7 @@ define_class!(
                 self.apply(mode);
             }
             self.schedule_next();
-            self.update_menu();
+            self.update_window();
         }
 
         #[unsafe(method(scheduleFired:))]
@@ -263,7 +320,7 @@ define_class!(
             _context: *mut c_void,
         ) {
             self.apply(self.system_mode());
-            self.update_menu();
+            self.update_window();
         }
 
         #[unsafe(method(clockChanged:))]
@@ -300,6 +357,7 @@ impl Delegate {
             state: RefCell::new(State::new(config)),
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
+            window: OnceCell::new(),
             appearance_observed: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
@@ -335,7 +393,7 @@ impl Delegate {
             None => self.apply(self.system_mode()),
         }
         self.schedule_next();
-        self.update_menu();
+        self.update_window();
     }
 
     fn observe_system(&self) {
@@ -381,109 +439,90 @@ impl Delegate {
 
     fn build_menu(&self) {
         let mtm = self.mtm();
-        let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
+        let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-2.0);
         if let Some(button) = status_item.button(mtm) {
-            button.setTitle(&NSString::from_str("pola"));
+            let data = NSData::with_bytes(include_bytes!("../../assets/pola-symbol.png"));
+            let image =
+                NSImage::initWithData(NSImage::alloc(), &data).expect("invalid status image");
+            image.setSize(NSSize::new(18.0, 18.0));
+            image.setTemplate(true);
+            button.setImage(Some(&image));
+            button.setToolTip(Some(ns_string!("pola")));
+            unsafe {
+                button.setTarget(Some(self));
+                button.setAction(Some(sel!(showWindow:)));
+            }
         }
+        self.ivars().status_item.set(status_item).unwrap();
 
         let menu = NSMenu::new(mtm);
-        let mode = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Light"),
-                None,
-                &NSString::new(),
-            )
-        };
-        mode.setEnabled(false);
+        let application = NSMenu::new(mtm);
+        for (title, action, key) in [
+            ("Show pola", sel!(showWindow:), "0"),
+            ("Settings…", sel!(showSettings:), ","),
+            ("Quit pola", sel!(quit:), "q"),
+        ] {
+            let item = unsafe {
+                application.addItemWithTitle_action_keyEquivalent(
+                    &NSString::from_str(title),
+                    Some(action),
+                    &NSString::from_str(key),
+                )
+            };
+            unsafe { item.setTarget(Some(self)) };
+        }
+        let root = NSMenuItem::new(mtm);
+        root.setSubmenu(Some(&application));
+        menu.addItem(&root);
 
-        let next = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Next: —"),
-                None,
-                &NSString::new(),
-            )
-        };
-        next.setEnabled(false);
-
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-        let toggle = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Toggle"),
-                Some(sel!(toggleMode:)),
-                &NSString::new(),
-            )
-        };
-        unsafe { toggle.setTarget(Some(self)) };
-
-        let schedule = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Schedule"),
-                Some(sel!(toggleSchedule:)),
-                &NSString::new(),
-            )
-        };
-        unsafe { schedule.setTarget(Some(self)) };
-
-        let settings = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Settings…"),
-                Some(sel!(showSettings:)),
-                &NSString::from_str(","),
-            )
-        };
-        unsafe { settings.setTarget(Some(self)) };
-
-        menu.addItem(&NSMenuItem::separatorItem(mtm));
-
-        let quit = unsafe {
-            menu.addItemWithTitle_action_keyEquivalent(
-                &NSString::from_str("Quit"),
-                Some(sel!(quit:)),
-                &NSString::from_str("q"),
-            )
-        };
-        unsafe { quit.setTarget(Some(self)) };
-
-        status_item.setMenu(Some(&menu));
-        self.ivars().status_item.set(status_item).unwrap();
+        let edit = NSMenu::new(mtm);
+        edit.setTitle(ns_string!("Edit"));
+        for (title, action, key) in [
+            ("Undo", sel!(undo:), "z"),
+            ("Cut", sel!(cut:), "x"),
+            ("Copy", sel!(copy:), "c"),
+            ("Paste", sel!(paste:), "v"),
+            ("Select All", sel!(selectAll:), "a"),
+        ] {
+            unsafe {
+                edit.addItemWithTitle_action_keyEquivalent(
+                    &NSString::from_str(title),
+                    Some(action),
+                    &NSString::from_str(key),
+                );
+            }
+        }
+        let root = NSMenuItem::new(mtm);
+        root.setSubmenu(Some(&edit));
+        menu.addItem(&root);
+        NSApplication::sharedApplication(mtm).setMainMenu(Some(&menu));
     }
 
-    fn update_menu(&self) {
-        let Some(status_item) = self.ivars().status_item.get() else {
-            return;
-        };
-        let Some(menu) = status_item.menu(self.mtm()) else {
-            return;
-        };
-        let items = menu.itemArray();
+    fn open_window(&self) {
+        let window = self
+            .ivars()
+            .window
+            .get_or_init(|| window::Window::new(self.mtm(), self));
+        self.update_window();
+        window.show();
+    }
 
-        if items.len() >= 5 {
-            items
-                .objectAtIndex(0)
-                .setTitle(&NSString::from_str(match self.system_mode() {
-                    Mode::Light => "Light",
-                    Mode::Dark => "Dark",
-                }));
+    fn open_settings(&self, page: isize) {
+        let settings = self
+            .ivars()
+            .settings
+            .get_or_init(|| settings::Settings::new(self.mtm(), self));
+        if !settings.is_visible() {
+            settings.load(&self.ivars().state.borrow().config, self);
+        }
+        settings.select_page(page);
+        settings.show();
+    }
 
-            let next = self
-                .ivars()
-                .state
-                .borrow()
-                .config
-                .schedule
-                .next(&Zoned::now())
-                .map(|event| format!("Next: {} → {}", event.at.strftime("%a %H:%M"), event.mode))
-                .unwrap_or_else(|| "Next: —".into());
-            items.objectAtIndex(1).setTitle(&NSString::from_str(&next));
-
-            items.objectAtIndex(4).setState(
-                if self.ivars().state.borrow().config.schedule.enabled {
-                    objc2_app_kit::NSControlStateValueOn
-                } else {
-                    objc2_app_kit::NSControlStateValueOff
-                },
-            );
+    fn update_window(&self) {
+        if let Some(window) = self.ivars().window.get() {
+            let state = self.ivars().state.borrow();
+            window.update(&state.config, self.system_mode(), state.next.as_ref());
         }
     }
 
@@ -599,7 +638,7 @@ impl Delegate {
 
         let Some(event) = next else {
             drop(state);
-            self.update_menu();
+            self.update_window();
             return;
         };
 
@@ -617,7 +656,7 @@ impl Delegate {
         };
         state.timer = Some(timer);
         drop(state);
-        self.update_menu();
+        self.update_window();
     }
 
     fn resume_schedule(&self) {

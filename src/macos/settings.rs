@@ -51,6 +51,7 @@ struct ProfileControls {
 
 pub struct Settings {
     window: Retained<NSWindow>,
+    tabs: Retained<NSTabView>,
     launch_at_login: Retained<NSButton>,
     schedule_enabled: Retained<NSButton>,
     apply_on_launch: Retained<NSButton>,
@@ -168,6 +169,7 @@ impl Settings {
 
         Self {
             window,
+            tabs,
             launch_at_login,
             schedule_enabled,
             apply_on_launch,
@@ -419,6 +421,10 @@ impl Settings {
         arg.remove.removeFromSuperview();
         drop(rows);
         self.layout_commands(mode);
+    }
+
+    pub fn select_page(&self, index: isize) {
+        self.tabs.selectTabViewItemAtIndex(index);
     }
 
     pub fn is_visible(&self) -> bool {
