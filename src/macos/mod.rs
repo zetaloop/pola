@@ -496,7 +496,12 @@ impl Delegate {
                     script.executeAndReturnError(Some(&mut error));
                 }
                 if let Some(error) = error {
-                    eprintln!("failed to change appearance: {error:?}");
+                    show_error(
+                        self.mtm(),
+                        "Could not change appearance",
+                        &format!("{error:?}"),
+                    );
+                    return;
                 }
             }
         }
@@ -518,6 +523,8 @@ impl Delegate {
     }
 
     fn apply_profile(&self, profile: &Profile) {
+        let mut errors = Vec::new();
+
         if let Some(path) = &profile.wallpaper {
             let workspace = NSWorkspace::sharedWorkspace();
             let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
@@ -529,15 +536,19 @@ impl Delegate {
                 if let Err(error) = unsafe {
                     workspace.setDesktopImageURL_forScreen_options_error(&url, &screen, &options)
                 } {
-                    eprintln!("failed to set wallpaper: {error:?}");
+                    errors.push(format!("Wallpaper: {error:?}"));
                 }
             }
         }
 
         for command in &profile.commands {
             if let Err(error) = command.run() {
-                eprintln!("failed to run {}: {error}", command.program);
+                errors.push(format!("{}: {error}", command.program));
             }
+        }
+
+        if !errors.is_empty() {
+            show_error(self.mtm(), "Could not apply appearance", &errors.join("\n"));
         }
     }
 

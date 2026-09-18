@@ -240,7 +240,7 @@ impl AppState {
             .app
             .show_menu_at(ScreenPoint::new(position.x, position.y), menu)
         {
-            eprintln!("failed to show menu: {error}");
+            show_error("Could not show menu", &error.to_string());
         }
     }
 
@@ -266,7 +266,7 @@ impl AppState {
             settings::SettingsInput(Rc::clone(self)),
         )) {
             *self.settings.borrow_mut() = OpenWindow::Closed;
-            eprintln!("failed to open settings: {error}");
+            show_error("Could not open settings", &error.to_string());
         }
     }
 
@@ -280,7 +280,7 @@ impl AppState {
 
     fn exit(&self) {
         if let Err(error) = self.app.exit() {
-            eprintln!("failed to exit: {error}");
+            show_error("Could not exit pola", &error.to_string());
         }
     }
 
@@ -394,7 +394,8 @@ impl AppState {
         if self.system_mode() != mode
             && let Err(error) = self.set_system_mode(mode)
         {
-            eprintln!("failed to change appearance: {error}");
+            show_error("Could not change appearance", &error);
+            return;
         }
         self.apply(mode);
     }
@@ -414,16 +415,22 @@ impl AppState {
     }
 
     fn apply_profile(&self, profile: &Profile) {
+        let mut errors = Vec::new();
+
         if let Some(path) = &profile.wallpaper
             && let Err(error) = set_wallpaper(path)
         {
-            eprintln!("failed to set wallpaper: {error}");
+            errors.push(format!("Wallpaper: {error}"));
         }
 
         for command in &profile.commands {
             if let Err(error) = command.run() {
-                eprintln!("failed to run {}: {error}", command.program);
+                errors.push(format!("{}: {error}", command.program));
             }
+        }
+
+        if !errors.is_empty() {
+            show_error("Could not apply appearance", &errors.join("\n"));
         }
     }
 
