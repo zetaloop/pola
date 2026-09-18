@@ -17,7 +17,7 @@ cargo build --release
 On macOS, create the native app bundle with:
 
 ```sh
-cargo app
+cargo build --profile MacOS --target-dir target/pola.app/Contents --config 'build.build-dir="target/app-build"'
 ```
 
 The app is written to `target/pola.app`. On Windows, the release build stages the self-contained Windows App Runtime beside `target/release/pola.exe`.
