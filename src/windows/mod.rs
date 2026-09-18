@@ -111,7 +111,10 @@ impl AppState {
 
         match mode {
             Some(mode) => self.select(mode),
-            None => self.apply(self.system_mode()),
+            None => match self.system_mode() {
+                Ok(mode) => self.apply(mode),
+                Err(error) => show_error("Could not read appearance", &error),
+            },
         }
         self.schedule_next();
 
@@ -191,7 +194,13 @@ impl AppState {
     }
 
     fn show_menu(self: &Rc<Self>, position: windows_notifyicon::Point) {
-        let target = self.system_mode().toggle();
+        let target = match self.system_mode() {
+            Ok(mode) => mode.toggle(),
+            Err(error) => {
+                show_error("Could not read appearance", &error);
+                return;
+            }
+        };
         let toggle = format!("Switch to {target}");
         let schedule = if self.config.borrow().schedule.enabled {
             "Disable schedule"
@@ -283,7 +292,10 @@ impl AppState {
     }
 
     fn toggle(&self) {
-        self.select(self.system_mode().toggle());
+        match self.system_mode() {
+            Ok(mode) => self.select(mode.toggle()),
+            Err(error) => show_error("Could not read appearance", &error),
+        }
         self.schedule_next();
     }
 
@@ -330,7 +342,7 @@ impl AppState {
             return Err(error.to_string());
         }
 
-        let mode = self.system_mode();
+        let mode = self.system_mode()?;
         let profile_changed = old.profile(mode) != config.profile(mode);
 
         *self.config.borrow_mut() = config;
@@ -342,13 +354,12 @@ impl AppState {
         Ok(())
     }
 
-    fn system_mode(&self) -> Mode {
+    fn system_mode(&self) -> Result<Mode, String> {
         CURRENT_USER
             .open(PERSONALIZE)
             .and_then(|key| key.get_u32("SystemUsesLightTheme"))
-            .map_or(Mode::Light, |value| {
-                if value == 0 { Mode::Dark } else { Mode::Light }
-            })
+            .map(|value| if value == 0 { Mode::Dark } else { Mode::Light })
+            .map_err(|error| error.to_string())
     }
 
     fn set_system_mode(&self, mode: Mode) -> Result<(), String> {
@@ -389,7 +400,7 @@ impl AppState {
     }
 
     fn select(&self, mode: Mode) {
-        if self.system_mode() != mode
+        if !self.system_mode().is_ok_and(|current| current == mode)
             && let Err(error) = self.set_system_mode(mode)
         {
             show_error("Could not change appearance", &error);
@@ -399,7 +410,10 @@ impl AppState {
     }
 
     fn appearance_changed(&self) {
-        self.apply(self.system_mode());
+        match self.system_mode() {
+            Ok(mode) => self.apply(mode),
+            Err(error) => show_error("Could not read appearance", &error),
+        }
     }
 
     fn apply(&self, mode: Mode) {
