@@ -38,7 +38,7 @@ impl Schedule {
                 if at.timestamp() <= now.timestamp()
                     && latest
                         .as_ref()
-                        .is_none_or(|(latest_at, _)| at.timestamp() > *latest_at)
+                        .is_none_or(|(latest_at, _)| at.timestamp() >= *latest_at)
                 {
                     latest = Some((at.timestamp(), rule.mode));
                 }
@@ -71,7 +71,7 @@ impl Schedule {
                 if at.timestamp() > now.timestamp()
                     && next
                         .as_ref()
-                        .is_none_or(|next: &Event| at.timestamp() < next.at.timestamp())
+                        .is_none_or(|next: &Event| at.timestamp() <= next.at.timestamp())
                 {
                     next = Some(Event {
                         at,
