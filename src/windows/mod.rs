@@ -10,18 +10,24 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey:
 use jiff::Zoned;
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
-        System::Com::{CLSCTX_ALL, CoCreateInstance},
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, WPARAM,
+        },
+        System::{
+            Com::{CLSCTX_ALL, CoCreateInstance},
+            Threading::CreateMutexW,
+        },
         UI::{
             Shell::{DWPOS_SPAN, DesktopWallpaper, IDesktopWallpaper},
             WindowsAndMessaging::{
-                HWND_BROADCAST, KillTimer, MB_ICONERROR, MB_OK, MessageBoxW,
-                PBT_APMRESUMEAUTOMATIC, SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetTimer,
-                WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMECHANGE, WM_TIMER,
+                FindWindowW, HWND_BROADCAST, KillTimer, MB_ICONERROR, MB_OK, MessageBoxW,
+                PBT_APMRESUMEAUTOMATIC, PostMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+                SetTimer, WM_APP, WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED,
+                WM_TIMECHANGE, WM_TIMER,
             },
         },
     },
-    core::PCWSTR,
+    core::{PCWSTR, w},
 };
 use windows_notifyicon::{NotifyIcon, NotifyIconEvent};
 use windows_reactor::*;
@@ -37,8 +43,20 @@ use crate::{
 mod settings;
 
 const TIMER_ID: usize = 1;
+const SHOW_SETTINGS: u32 = WM_APP + 1;
+const RUNTIME: windows::core::PCWSTR = w!("io.github.zetaloop.pola.runtime");
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+struct Instance(HANDLE);
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        unsafe {
+            _ = CloseHandle(self.0);
+        }
+    }
+}
 
 enum OpenWindow {
     Closed,
@@ -47,6 +65,7 @@ enum OpenWindow {
 }
 
 pub(crate) struct AppState {
+    _instance: Instance,
     app: AppContext,
     config: RefCell<Config>,
     applied: Cell<Option<Mode>>,
@@ -59,8 +78,9 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    fn new(app: &AppContext, config: Config) -> Rc<Self> {
+    fn new(app: &AppContext, config: Config, instance: Instance) -> Rc<Self> {
         Rc::new(Self {
+            _instance: instance,
             app: app.clone(),
             config: RefCell::new(config),
             applied: Cell::new(None),
@@ -117,12 +137,16 @@ impl AppState {
 
     fn add_message_window(self: &Rc<Self>) -> windows_notifyicon::Result<()> {
         let state = Rc::downgrade(self);
-        let window = Window::new("pola")
+        let window = Window::new("io.github.zetaloop.pola.runtime")
             .visible(false)
             .quit_on_close(false)
             .on_message(move |_hwnd, message, wparam, _lparam| {
                 let state = state.upgrade()?;
                 match message {
+                    SHOW_SETTINGS => {
+                        state.open_settings();
+                        Some(0)
+                    }
                     WM_SETTINGCHANGE => {
                         state.appearance_changed();
                         state.schedule_next();
@@ -558,7 +582,31 @@ fn show_error(title: &str, message: &str) {
     }
 }
 
+fn instance() -> windows::core::Result<Option<Instance>> {
+    let instance =
+        Instance(unsafe { CreateMutexW(None, false, w!("Local\\io.github.zetaloop.pola"))? });
+
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        let window = unsafe { FindWindowW(None, RUNTIME)? };
+        unsafe {
+            PostMessageW(Some(window), SHOW_SETTINGS, WPARAM(0), LPARAM(0))?;
+        }
+        Ok(None)
+    } else {
+        Ok(Some(instance))
+    }
+}
+
 pub fn run() {
+    let instance = match instance() {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            show_error("Could not start pola", &error.to_string());
+            return;
+        }
+    };
+
     let config = match Config::load() {
         Ok(config) => config,
         Err(error) => {
@@ -568,7 +616,7 @@ pub fn run() {
     };
 
     if let Err(error) = App::run_with(move |app| {
-        let state = AppState::new(app, config);
+        let state = AppState::new(app, config, instance);
         state.start()?;
         Ok(state)
     }) {
