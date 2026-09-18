@@ -323,6 +323,7 @@ impl AppState {
     pub(crate) fn save_config(&self, config: Config, launch: bool) -> Result<(), String> {
         let old = self.config.borrow().clone();
         let old_launch = launch_at_login();
+        let mode = self.system_mode()?;
 
         self.register_hotkey(&config.shortcut)
             .map_err(|error| error.to_string())?;
@@ -342,7 +343,6 @@ impl AppState {
             return Err(error.to_string());
         }
 
-        let mode = self.system_mode()?;
         let profile_changed = old.profile(mode) != config.profile(mode);
 
         *self.config.borrow_mut() = config;
