@@ -1,31 +1,19 @@
 use objc2::{
-    AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
-    rc::{Retained, Weak},
+    MainThreadOnly, define_class, msg_send,
+    rc::Retained,
     runtime::{ProtocolObject, Sel},
 };
 use objc2_app_kit::{
-    NSApplication, NSControlTextEditingDelegate, NSDragOperation, NSDraggingDestination,
-    NSDraggingInfo, NSImage, NSImageScaling, NSImageView, NSLayoutAttribute,
-    NSPasteboardTypeFileURL, NSStackView, NSTextField, NSTextFieldDelegate,
-    NSUserInterfaceLayoutOrientation,
+    NSControlTextEditingDelegate, NSDragOperation, NSDraggingDestination, NSDraggingInfo,
+    NSPasteboardTypeFileURL, NSTextField, NSTextFieldBezelStyle, NSTextFieldDelegate,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSString, NSURL,
 };
 
-use super::ui;
-
-pub struct Ivars {
-    field: Retained<NSTextField>,
-    image: Option<Retained<NSImageView>>,
-    target: Weak<NSObject>,
-    action: Sel,
-}
-
 define_class!(
-    #[unsafe(super = NSStackView)]
+    #[unsafe(super = NSTextField)]
     #[thread_kind = MainThreadOnly]
-    #[ivars = Ivars]
     pub struct FileInput;
 
     unsafe impl NSObjectProtocol for FileInput {}
@@ -36,26 +24,23 @@ define_class!(
             self.changed();
         }
     }
-
     unsafe impl NSDraggingDestination for FileInput {
         #[unsafe(method(draggingEntered:))]
-        fn dragging_entered(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
+        fn entered(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
             if file_path(sender).is_some() {
                 NSDragOperation::Copy
             } else {
                 NSDragOperation::None
             }
         }
-
         #[unsafe(method(prepareForDragOperation:))]
-        fn prepare_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+        fn prepare(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
             file_path(sender).is_some()
         }
-
         #[unsafe(method(performDragOperation:))]
-        fn perform_drag(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
+        fn perform(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> bool {
             if let Some(path) = file_path(sender) {
-                self.ivars().field.setStringValue(&path);
+                self.setStringValue(&path);
                 self.changed();
                 true
             } else {
@@ -66,83 +51,38 @@ define_class!(
 );
 
 impl FileInput {
-    pub fn new(
-        mtm: MainThreadMarker,
-        preview: bool,
-        target: &NSObject,
-        action: Sel,
-    ) -> Retained<Self> {
-        let field = NSTextField::textFieldWithString(&NSString::new(), mtm);
-        field.setPlaceholderString(Some(&NSString::from_str("Drop a file or enter its path")));
-        let image = preview
-            .then(|| NSImageView::imageViewWithImage(&ui::symbol("photo", "Wallpaper"), mtm));
-        let this = Self::alloc(mtm).set_ivars(Ivars {
-            field,
-            image,
-            target: Weak::new(target),
-            action,
-        });
+    pub fn new(mtm: MainThreadMarker, target: &NSObject, action: Sel) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        this.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        this.setAlignment(NSLayoutAttribute::Leading);
-        this.setSpacing(8.0);
+        this.setBezeled(true);
+        this.setBezelStyle(NSTextFieldBezelStyle::RoundedBezel);
+        this.setEditable(true);
+        this.setSelectable(true);
+        this.setPlaceholderString(Some(&NSString::from_str("Drop a file or enter its path")));
         this.registerForDraggedTypes(&NSArray::from_slice(&[unsafe { NSPasteboardTypeFileURL }]));
-        if let Some(image) = &this.ivars().image {
-            image.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
-            image
-                .heightAnchor()
-                .constraintEqualToConstant(180.0)
-                .setActive(true);
-            image
-                .widthAnchor()
-                .constraintEqualToAnchor(&this.widthAnchor())
-                .setActive(true);
-            this.addArrangedSubview(image);
+        unsafe {
+            this.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+            this.setTarget(Some(target));
+            this.setAction(Some(action));
         }
-        let field = &this.ivars().field;
-        unsafe { field.setDelegate(Some(ProtocolObject::from_ref(&*this))) };
-        this.addArrangedSubview(field);
-        field
-            .widthAnchor()
-            .constraintEqualToAnchor(&this.widthAnchor())
-            .setActive(true);
         this
     }
-
     pub fn value(&self) -> String {
-        self.ivars().field.stringValue().to_string()
+        self.stringValue().to_string()
     }
-
-    pub fn set_value(&self, path: &str) {
-        self.ivars().field.setStringValue(&NSString::from_str(path));
-        self.update_image();
+    pub fn set_value(&self, value: &str) {
+        self.setStringValue(&NSString::from_str(value));
     }
-
-    pub fn update_image(&self) {
-        if let Some(view) = &self.ivars().image {
-            let image = NSImage::initWithContentsOfFile(
-                NSImage::alloc(),
-                &self.ivars().field.stringValue(),
-            )
-            .unwrap_or_else(|| ui::symbol("photo", "Wallpaper"));
-            view.setImage(Some(&image));
-        }
-    }
-
     fn changed(&self) {
-        if let Some(target) = self.ivars().target.load() {
+        if let Some(action) = self.action() {
             unsafe {
-                NSApplication::sharedApplication(self.mtm()).sendAction_to_from(
-                    self.ivars().action,
-                    Some(&target),
-                    Some(self),
-                );
+                self.sendAction_to(Some(action), self.target().as_deref());
             }
         }
     }
 }
 
-fn file_path(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Option<Retained<NSString>> {
+pub fn file_path(sender: &ProtocolObject<dyn NSDraggingInfo>) -> Option<Retained<NSString>> {
     let items = sender.draggingPasteboard().pasteboardItems()?;
     if items.len() != 1 {
         return None;

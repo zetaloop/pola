@@ -1,371 +1,208 @@
-use std::{cell::RefCell, str::FromStr};
+use std::cell::OnceCell;
 
-use jiff::civil::Time;
-use objc2::{AnyThread, MainThreadOnly, rc::Retained, sel};
+use objc2::{
+    DefinedClass, MainThreadOnly, define_class, msg_send,
+    rc::{Retained, Weak},
+    runtime::ProtocolObject,
+    sel,
+};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSControlStateValueOff, NSControlStateValueOn,
-    NSPopUpButton, NSScrollView, NSTabView, NSTabViewItem, NSTextField, NSView, NSWindow,
-    NSWindowStyleMask,
+    NSColor, NSControlStateValueOn, NSStackViewDistribution, NSSwitch, NSTextField, NSWindow,
+    NSWindowDelegate,
 };
-use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSString};
 
-use crate::{
-    config::Config,
-    mode::Mode,
-    schedule::{Rule, Weekday},
-};
+use super::{Delegate, launch_at_login, set_launch_at_login, shortcut::Recorder, ui};
 
-use super::Delegate;
-
-const WIDTH: f64 = 720.0;
-const HEIGHT: f64 = 540.0;
-const CONTENT_HEIGHT: f64 = 452.0;
-const ROW_HEIGHT: f64 = 34.0;
-
-struct ScheduleRow {
-    view: Retained<NSView>,
-    days: Vec<Retained<NSButton>>,
-    time: Retained<NSTextField>,
-    mode: Retained<NSPopUpButton>,
-    remove: Retained<NSButton>,
-}
-
-pub struct Settings {
+pub struct Ivars {
+    owner: Weak<Delegate>,
     window: Retained<NSWindow>,
-    tabs: Retained<NSTabView>,
-    launch_at_login: Retained<NSButton>,
-    schedule_enabled: Retained<NSButton>,
-    apply_on_launch: Retained<NSButton>,
-    shortcut: Retained<NSTextField>,
-    schedule: Retained<NSView>,
-    rules: RefCell<Vec<ScheduleRow>>,
+    launch: Retained<NSSwitch>,
+    apply: Retained<NSSwitch>,
+    recorder: OnceCell<Retained<Recorder>>,
+    error: Retained<NSTextField>,
 }
+
+define_class!(
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = Ivars]
+    pub struct Settings;
+
+    unsafe impl NSObjectProtocol for Settings {}
+    unsafe impl NSWindowDelegate for Settings {
+        #[unsafe(method(windowWillClose:))]
+        fn closing(&self, _notification: &NSNotification) {
+            self.ivars().recorder.get().unwrap().finish();
+        }
+    }
+
+    impl Settings {
+        #[unsafe(method(launchChanged:))]
+        fn launch_changed(&self, sender: &NSSwitch) {
+            match set_launch_at_login(sender.state() == NSControlStateValueOn) {
+                Ok(()) => self.error(""),
+                Err(error) => self.error(&error),
+            }
+            self.update();
+        }
+
+        #[unsafe(method(applyChanged:))]
+        fn apply_changed(&self, sender: &NSSwitch) {
+            if let Some(owner) = self.ivars().owner.load() {
+                let mut config = owner.config();
+                config.schedule.apply_on_launch = sender.state() == NSControlStateValueOn;
+                match owner.save_config(config) {
+                    Ok(()) => self.error(""),
+                    Err(error) => self.error(&error),
+                }
+                self.update();
+            }
+        }
+
+        #[unsafe(method(clearShortcut:))]
+        fn clear_shortcut(&self, _sender: &NSObject) {
+            self.ivars().recorder.get().unwrap().finish();
+            self.save_shortcut("");
+        }
+    }
+);
 
 impl Settings {
-    pub fn new(mtm: MainThreadMarker, delegate: &Delegate) -> Self {
-        let window = unsafe {
-            NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm),
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT)),
-                NSWindowStyleMask::Titled
-                    | NSWindowStyleMask::Closable
-                    | NSWindowStyleMask::Miniaturizable,
-                NSBackingStoreType::Buffered,
-                false,
-            )
-        };
-        window.setTitle(&NSString::from_str("pola"));
-        unsafe { window.setReleasedWhenClosed(false) };
-        window.center();
-
-        let content = window
-            .contentView()
-            .expect("settings window needs content view");
-        let tabs = NSTabView::initWithFrame(
-            NSTabView::alloc(mtm),
-            NSRect::new(NSPoint::new(20.0, 64.0), NSSize::new(680.0, 450.0)),
-        );
-        content.addSubview(&tabs);
-
-        let general = tab(&tabs, mtm, "General");
-        let schedule_tab = tab(&tabs, mtm, "Schedule");
-
-        let launch_at_login = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Launch at login"),
-                None,
-                None,
-                mtm,
-            )
-        };
-        launch_at_login.setFrame(rect(24.0, 356.0, 260.0, 24.0));
-        general.addSubview(&launch_at_login);
-
-        let schedule_enabled = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Enable schedule"),
-                None,
-                None,
-                mtm,
-            )
-        };
-        schedule_enabled.setFrame(rect(24.0, 318.0, 260.0, 24.0));
-        general.addSubview(&schedule_enabled);
-
-        let apply_on_launch = unsafe {
-            NSButton::checkboxWithTitle_target_action(
-                &NSString::from_str("Apply schedule on launch"),
-                None,
-                None,
-                mtm,
-            )
-        };
-        apply_on_launch.setFrame(rect(24.0, 280.0, 260.0, 24.0));
-        general.addSubview(&apply_on_launch);
-
-        let shortcut_label = NSTextField::labelWithString(&NSString::from_str("Shortcut"), mtm);
-        shortcut_label.setFrame(rect(24.0, 230.0, 110.0, 24.0));
-        general.addSubview(&shortcut_label);
-
-        let shortcut = NSTextField::textFieldWithString(&NSString::new(), mtm);
-        shortcut.setFrame(rect(140.0, 228.0, 260.0, 24.0));
-        general.addSubview(&shortcut);
-
-        let schedule_scroll =
-            NSScrollView::initWithFrame(NSScrollView::alloc(mtm), rect(16.0, 48.0, 640.0, 344.0));
-        schedule_scroll.setHasVerticalScroller(true);
-        let schedule =
-            NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 620.0, CONTENT_HEIGHT));
-        schedule_scroll.setDocumentView(Some(&schedule));
-        schedule_tab.addSubview(&schedule_scroll);
-
-        let add_rule = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Add"),
-                Some(delegate),
-                Some(sel!(addSchedule:)),
-                mtm,
-            )
-        };
-        add_rule.setFrame(rect(16.0, 8.0, 90.0, 30.0));
-        schedule_tab.addSubview(&add_rule);
-
-        let save = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Save"),
-                Some(delegate),
-                Some(sel!(saveSettings:)),
-                mtm,
-            )
-        };
-        save.setFrame(rect(610.0, 18.0, 90.0, 32.0));
-        content.addSubview(&save);
-
-        Self {
+    pub fn new(mtm: MainThreadMarker, owner: &Delegate) -> Retained<Self> {
+        let window = ui::window(mtm, "Settings", 480.0, 260.0);
+        let launch = NSSwitch::new(mtm);
+        let apply = NSSwitch::new(mtm);
+        let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
+        error.setTextColor(Some(&NSColor::systemRedColor()));
+        let this = Self::alloc(mtm).set_ivars(Ivars {
+            owner: Weak::new(owner),
             window,
-            tabs,
-            launch_at_login,
-            schedule_enabled,
-            apply_on_launch,
-            shortcut,
-            schedule,
-            rules: RefCell::new(Vec::new()),
-        }
-    }
-
-    pub fn load(&self, config: &Config, delegate: &Delegate) {
-        self.launch_at_login.setState(if super::launch_at_login() {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
+            launch,
+            apply,
+            recorder: OnceCell::new(),
+            error,
         });
-        self.schedule_enabled.setState(if config.schedule.enabled {
-            NSControlStateValueOn
-        } else {
-            NSControlStateValueOff
-        });
-        self.apply_on_launch
-            .setState(if config.schedule.apply_on_launch {
-                NSControlStateValueOn
-            } else {
-                NSControlStateValueOff
-            });
-        self.shortcut
-            .setStringValue(&NSString::from_str(&config.shortcut));
-
-        self.clear_rules();
-        for rule in &config.schedule.rules {
-            self.add_rule(delegate, Some(rule));
-        }
-    }
-
-    pub fn config(&self, current: &Config) -> Result<Config, Box<dyn std::error::Error>> {
-        let shortcut = self.shortcut.stringValue().to_string();
-
-        let rules = self
-            .rules
-            .borrow()
-            .iter()
-            .map(rule_value)
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(Config {
-            shortcut,
-            schedule: crate::schedule::Schedule {
-                enabled: self.schedule_enabled.state() == NSControlStateValueOn,
-                apply_on_launch: self.apply_on_launch.state() == NSControlStateValueOn,
-                rules,
-            },
-            ..current.clone()
-        })
-    }
-
-    pub fn add_rule(&self, delegate: &Delegate, rule: Option<&Rule>) {
-        let mtm = self.window.mtm();
-        let view = NSView::initWithFrame(NSView::alloc(mtm), rect(0.0, 0.0, 620.0, ROW_HEIGHT));
-
-        let mut days = Vec::with_capacity(7);
-        for (index, title) in ["M", "T", "W", "T", "F", "S", "S"].into_iter().enumerate() {
-            let button = unsafe {
-                NSButton::checkboxWithTitle_target_action(
-                    &NSString::from_str(title),
-                    None,
-                    None,
-                    mtm,
-                )
-            };
-            button.setFrame(rect(8.0 + index as f64 * 42.0, 5.0, 40.0, 24.0));
-            if rule.is_some_and(|rule| rule.days.contains(&WEEKDAYS[index])) {
-                button.setState(NSControlStateValueOn);
-            }
-            view.addSubview(&button);
-            days.push(button);
-        }
-
-        let time = NSTextField::textFieldWithString(
-            &NSString::from_str(
-                &rule
-                    .map(|rule| rule.time.strftime("%H:%M").to_string())
-                    .unwrap_or_else(|| "18:00".into()),
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        this.ivars()
+            .window
+            .setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        let content = ui::stack(mtm, false, &[]);
+        for (label, control, action) in [
+            (
+                "Launch at login",
+                &this.ivars().launch,
+                sel!(launchChanged:),
             ),
-            mtm,
-        );
-        time.setFrame(rect(306.0, 5.0, 74.0, 24.0));
-        view.addSubview(&time);
-
-        let mode = NSPopUpButton::initWithFrame_pullsDown(
-            NSPopUpButton::alloc(mtm),
-            rect(390.0, 3.0, 100.0, 28.0),
-            false,
-        );
-        mode.addItemWithTitle(&NSString::from_str("Light"));
-        mode.addItemWithTitle(&NSString::from_str("Dark"));
-        mode.selectItemWithTitle(&NSString::from_str(match rule.map(|rule| rule.mode) {
-            Some(Mode::Dark) => "Dark",
-            _ => "Light",
-        }));
-        view.addSubview(&mode);
-
-        let remove = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str("Remove"),
-                Some(delegate),
-                Some(sel!(removeSchedule:)),
-                mtm,
-            )
-        };
-        remove.setFrame(rect(506.0, 3.0, 96.0, 28.0));
-        view.addSubview(&remove);
-
-        self.rules.borrow_mut().push(ScheduleRow {
-            view,
-            days,
-            time,
-            mode,
-            remove,
-        });
-        self.layout_rules();
-    }
-
-    pub fn remove_rule(&self, index: usize) {
-        let mut rows = self.rules.borrow_mut();
-        if index >= rows.len() {
-            return;
+            (
+                "Apply schedule on launch",
+                &this.ivars().apply,
+                sel!(applyChanged:),
+            ),
+        ] {
+            unsafe {
+                control.setTarget(Some(&this));
+                control.setAction(Some(action));
+            }
+            let label = ui::label(mtm, label, 13.0);
+            let row = ui::stack(mtm, true, &[&label, control]);
+            row.setDistribution(NSStackViewDistribution::EqualSpacing);
+            content.addArrangedSubview(&row);
+            row.widthAnchor()
+                .constraintEqualToAnchor(&content.widthAnchor())
+                .setActive(true);
         }
-        rows.remove(index).view.removeFromSuperview();
-        drop(rows);
-        self.layout_rules();
-    }
-
-    pub fn select_page(&self, index: isize) {
-        self.tabs.selectTabViewItemAtIndex(index);
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.window.isVisible()
-    }
-
-    pub fn launch_at_login(&self) -> bool {
-        self.launch_at_login.state() == NSControlStateValueOn
+        let recorder = this
+            .ivars()
+            .recorder
+            .get_or_init(|| Recorder::new(mtm, &this));
+        let clear = ui::button(mtm, "Clear", &this, sel!(clearShortcut:));
+        let shortcut_label = ui::label(mtm, "Global shortcut", 13.0);
+        let controls = ui::stack(mtm, true, &[recorder, &clear]);
+        let row = ui::stack(mtm, true, &[&shortcut_label, &controls]);
+        row.setDistribution(NSStackViewDistribution::EqualSpacing);
+        content.addArrangedSubview(&row);
+        row.widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
+        content.addArrangedSubview(&this.ivars().error);
+        this.ivars()
+            .error
+            .widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
+        ui::mount(&this.ivars().window.contentView().unwrap(), &content, 24.0);
+        this.update();
+        this
     }
 
     pub fn show(&self) {
-        self.window.makeKeyAndOrderFront(None);
-        objc2_app_kit::NSApplication::sharedApplication(self.window.mtm()).activate();
+        self.update();
+        ui::show(&self.ivars().window);
     }
 
-    pub fn show_error(&self, message: &str) {
-        let alert = NSAlert::new(self.window.mtm());
-        alert.setMessageText(&NSString::from_str("Could not save settings"));
-        alert.setInformativeText(&NSString::from_str(message));
-        alert.runModal();
-    }
-
-    fn clear_rules(&self) {
-        for row in self.rules.borrow_mut().drain(..) {
-            row.view.removeFromSuperview();
+    pub fn update(&self) {
+        if let Some(owner) = self.ivars().owner.load() {
+            let config = owner.config();
+            self.ivars().launch.setState(isize::from(launch_at_login()));
+            self.ivars()
+                .apply
+                .setState(isize::from(config.schedule.apply_on_launch));
+            self.ivars()
+                .recorder
+                .get()
+                .unwrap()
+                .display(&config.shortcut);
         }
     }
 
-    fn layout_rules(&self) {
-        let rows = self.rules.borrow();
-        let height = (rows.len() as f64 * ROW_HEIGHT).max(CONTENT_HEIGHT);
-        self.schedule.setFrameSize(NSSize::new(620.0, height));
+    pub fn error(&self, error: &str) {
+        self.ivars()
+            .error
+            .setStringValue(&NSString::from_str(error));
+    }
 
-        for (index, row) in rows.iter().enumerate() {
-            row.view.setFrameOrigin(NSPoint::new(
-                0.0,
-                height - (index as f64 + 1.0) * ROW_HEIGHT,
-            ));
-            row.remove.setTag(index as isize);
+    pub fn suspend_shortcut(&self) -> bool {
+        let Some(owner) = self.ivars().owner.load() else {
+            return false;
+        };
+        match owner.register_hotkey("") {
+            Ok(()) => {
+                self.error("");
+                true
+            }
+            Err(error) => {
+                self.error(&error.to_string());
+                false
+            }
+        }
+    }
+
+    pub fn restore_shortcut(&self) {
+        if let Some(owner) = self.ivars().owner.load() {
+            if let Err(error) = owner.register_hotkey(&owner.config().shortcut) {
+                self.error(&error.to_string());
+            }
+            self.update();
+        }
+    }
+
+    pub fn save_shortcut(&self, shortcut: &str) -> bool {
+        let Some(owner) = self.ivars().owner.load() else {
+            return false;
+        };
+        let mut config = owner.config();
+        config.shortcut = shortcut.into();
+        match owner.save_config(config) {
+            Ok(()) => {
+                self.error("");
+                self.update();
+                true
+            }
+            Err(error) => {
+                self.error(&error);
+                false
+            }
         }
     }
 }
-
-fn rule_value(row: &ScheduleRow) -> Result<Rule, Box<dyn std::error::Error>> {
-    let days = row
-        .days
-        .iter()
-        .zip(WEEKDAYS)
-        .filter_map(|(button, day)| (button.state() == NSControlStateValueOn).then_some(day))
-        .collect::<Vec<_>>();
-
-    if days.is_empty() {
-        return Err("schedule rule needs at least one day".into());
-    }
-
-    let time = Time::from_str(&row.time.stringValue().to_string())?;
-    let mode = if row.mode.indexOfSelectedItem() == 1 {
-        Mode::Dark
-    } else {
-        Mode::Light
-    };
-
-    Ok(Rule { days, time, mode })
-}
-
-fn tab(tabs: &NSTabView, mtm: MainThreadMarker, label: &str) -> Retained<NSView> {
-    let item = unsafe { NSTabViewItem::initWithIdentifier(NSTabViewItem::alloc(), None) };
-    item.setLabel(&NSString::from_str(label));
-    let view = NSView::initWithFrame(
-        NSView::alloc(mtm),
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(664.0, 410.0)),
-    );
-    item.setView(Some(&view));
-    tabs.addTabViewItem(&item);
-    view
-}
-
-fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
-    NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
-}
-
-const WEEKDAYS: [Weekday; 7] = [
-    Weekday::Mon,
-    Weekday::Tue,
-    Weekday::Wed,
-    Weekday::Thu,
-    Weekday::Fri,
-    Weekday::Sat,
-    Weekday::Sun,
-];

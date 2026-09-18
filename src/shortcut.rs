@@ -10,6 +10,13 @@ pub struct Shortcut {
 
 impl Shortcut {
     pub fn register(&mut self, text: &str) -> Result<(), Box<dyn Error>> {
+        if text.is_empty() {
+            if let Some(old) = self.hotkey {
+                self.manager.as_ref().unwrap().unregister(old)?;
+                self.hotkey = None;
+            }
+            return Ok(());
+        }
         let hotkey = HotKey::from_str(text)?;
         if self.hotkey == Some(hotkey) {
             return Ok(());

@@ -1,6 +1,6 @@
 # pola
 
-pola is a native light and dark appearance tool for Windows 11 and macOS 26.
+pola is a native light and dark appearance tool for Windows 11 and macOS 27.
 
 It follows system appearance changes, runs a weekly schedule with multiple transitions per day, provides a configurable global shortcut and launch-at-login control, and applies a wallpaper plus any configured commands for each mode. Settings use WinUI on Windows and AppKit on macOS.
 

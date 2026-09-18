@@ -37,7 +37,7 @@ pub struct Ivars {
     owner: Weak<Delegate>,
     mode: Mode,
     profile: RefCell<Profile>,
-    window: Retained<NSWindow>,
+    view: Retained<objc2_app_kit::NSView>,
     commands: Retained<NSStackView>,
     error: Retained<NSTextField>,
     form: RefCell<Option<CommandForm>>,
@@ -55,26 +55,35 @@ define_class!(
         #[unsafe(method(wallpaperChanged:))]
         fn wallpaper_changed(&self, input: &FileInput) {
             let path = input.value();
-            if !path.is_empty() && NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&path)).is_none() {
+            if !path.is_empty()
+                && NSImage::initWithContentsOfFile(NSImage::alloc(), &NSString::from_str(&path))
+                    .is_none()
+            {
                 self.error("This file could not be opened as an image.");
                 return;
             }
             let mut profile = self.ivars().profile.borrow().clone();
             profile.wallpaper = (!path.is_empty()).then(|| PathBuf::from(path));
-            if self.save(profile) { input.update_image(); }
+            self.save(profile);
         }
 
         #[unsafe(method(addCommand:))]
-        fn add_command(&self, _sender: &NSObject) { self.edit_command(None); }
+        fn add_command(&self, _sender: &NSObject) {
+            self.edit_command(None);
+        }
 
         #[unsafe(method(editCommand:))]
-        fn edit(&self, sender: &NSButton) { self.edit_command(Some(sender.tag() as usize)); }
+        fn edit(&self, sender: &NSButton) {
+            self.edit_command(Some(sender.tag() as usize));
+        }
 
         #[unsafe(method(removeCommand:))]
         fn remove_command(&self, sender: &NSButton) {
             let mut profile = self.ivars().profile.borrow().clone();
             profile.commands.remove(sender.tag() as usize);
-            if self.save(profile) { self.update_commands(); }
+            if self.save(profile) {
+                self.update_commands();
+            }
         }
 
         #[unsafe(method(commandChanged:))]
@@ -86,7 +95,9 @@ define_class!(
 
         #[unsafe(method(addArgument:))]
         fn add_argument(&self, _sender: &NSObject) {
-            if let Some(form) = self.ivars().form.borrow_mut().as_mut() { form.add_argument(self, ""); }
+            if let Some(form) = self.ivars().form.borrow_mut().as_mut() {
+                form.add_argument(self, "");
+            }
         }
 
         #[unsafe(method(removeArgument:))]
@@ -95,7 +106,9 @@ define_class!(
                 let argument = form.arguments.remove(sender.tag() as usize);
                 form.list.removeArrangedSubview(&argument.row);
                 argument.row.removeFromSuperview();
-                for (index, argument) in form.arguments.iter().enumerate() { argument.remove.setTag(index as isize); }
+                for (index, argument) in form.arguments.iter().enumerate() {
+                    argument.remove.setTag(index as isize);
+                }
             }
         }
 
@@ -103,15 +116,23 @@ define_class!(
         fn save_command(&self, _sender: &NSObject) {
             let result = {
                 let form = self.ivars().form.borrow();
-                let Some(form) = form.as_ref() else { return; };
+                let Some(form) = form.as_ref() else {
+                    return;
+                };
+                form.window.makeFirstResponder(None);
                 let program = form.program.value();
                 if program.is_empty() {
-                    form.error.setStringValue(&NSString::from_str("Enter a program to run."));
+                    form.error
+                        .setStringValue(&NSString::from_str("Enter a program to run."));
                     return;
                 }
                 let command = Command {
                     program,
-                    args: form.arguments.iter().map(|arg| arg.field.string().to_string()).collect(),
+                    args: form
+                        .arguments
+                        .iter()
+                        .map(|arg| arg.field.string().to_string())
+                        .collect(),
                 };
                 let mut profile = self.ivars().profile.borrow().clone();
                 match form.index {
@@ -129,15 +150,18 @@ define_class!(
         }
 
         #[unsafe(method(cancelCommand:))]
-        fn cancel_command(&self, _sender: &NSObject) { self.close_command(); }
+        fn cancel_command(&self, _sender: &NSObject) {
+            self.close_command();
+        }
 
-        #[unsafe(method(done:))]
-        fn done(&self, _sender: &NSObject) {
-            self.ivars().window.makeFirstResponder(None);
-            if self.ivars().error.stringValue().is_empty()
-                && let Some(parent) = self.ivars().window.sheetParent() {
-                    parent.endSheet(&self.ivars().window);
-                }
+        #[unsafe(method(closeInspector:))]
+        fn close(&self, _sender: &NSObject) {
+            if let Some(window) = self.ivars().view.window() {
+                window.makeFirstResponder(None);
+            }
+            if let Some(owner) = self.ivars().owner.load() {
+                owner.close_inspector();
+            }
         }
     }
 );
@@ -149,7 +173,7 @@ impl Editor {
         mode: Mode,
         profile: Profile,
     ) -> Retained<Self> {
-        let window = ui::window(mtm, &format!("{mode} appearance"), 560.0, 560.0);
+        let view = objc2_app_kit::NSView::new(mtm);
         let commands = ui::stack(mtm, false, &[]);
         let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
         error.setTextColor(Some(&NSColor::systemRedColor()));
@@ -157,13 +181,13 @@ impl Editor {
             owner: Weak::new(owner),
             mode,
             profile: RefCell::new(profile),
-            window,
+            view,
             commands,
             error,
             form: RefCell::new(None),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        let wallpaper = FileInput::new(mtm, true, &this, sel!(wallpaperChanged:));
+        let wallpaper = FileInput::new(mtm, &this, sel!(wallpaperChanged:));
         wallpaper.set_value(
             &this
                 .ivars()
@@ -174,17 +198,19 @@ impl Editor {
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         );
-        let title = ui::label(mtm, "Wallpaper", 17.0);
+        let name = ui::label(mtm, &format!("{mode} appearance"), 17.0);
+        let title = ui::label(mtm, "Wallpaper", 13.0);
         let commands_title = ui::label(mtm, "Commands", 17.0);
         let add = ui::button(mtm, "Add…", &this, sel!(addCommand:));
         let heading = ui::stack(mtm, true, &[&commands_title, &add]);
         heading.setDistribution(NSStackViewDistribution::EqualSpacing);
         let commands = ui::scroll(mtm, &this.ivars().commands, 150.0);
-        let done = ui::button(mtm, "Done", &this, sel!(done:));
+        let done = ui::button(mtm, "Close", &this, sel!(closeInspector:));
         let content = ui::stack(
             mtm,
             false,
             &[
+                &name,
                 &title,
                 &wallpaper,
                 &heading,
@@ -203,13 +229,13 @@ impl Editor {
                 .constraintEqualToAnchor(&content.widthAnchor())
                 .setActive(true);
         }
-        ui::mount(&this.ivars().window.contentView().unwrap(), &content, 24.0);
+        ui::mount(&this.ivars().view, &content, 20.0);
         this.update_commands();
         this
     }
 
-    pub fn show(&self, parent: &NSWindow) {
-        parent.beginSheet_completionHandler(&self.ivars().window, None);
+    pub fn view(&self) -> &objc2_app_kit::NSView {
+        &self.ivars().view
     }
 
     fn save(&self, profile: Profile) -> bool {
@@ -279,14 +305,17 @@ impl Editor {
             }
         }
         self.ivars()
-            .window
+            .view
+            .window()
+            .unwrap()
             .beginSheet_completionHandler(&form.window, None);
         *self.ivars().form.borrow_mut() = Some(form);
     }
 
     fn close_command(&self) {
-        if let Some(form) = self.ivars().form.borrow_mut().take() {
-            self.ivars().window.endSheet(&form.window);
+        let form = self.ivars().form.borrow_mut().take();
+        if let Some(form) = form {
+            self.ivars().view.window().unwrap().endSheet(&form.window);
         }
     }
 }
@@ -295,7 +324,7 @@ impl CommandForm {
     fn new(editor: &Editor, index: Option<usize>, command: Option<&Command>) -> Self {
         let mtm = editor.mtm();
         let window = ui::window(mtm, "Command", 520.0, 400.0);
-        let program = FileInput::new(mtm, false, editor, sel!(commandChanged:));
+        let program = FileInput::new(mtm, editor, sel!(commandChanged:));
         program.set_value(command.map_or("", |command| &command.program));
         let list = ui::stack(mtm, false, &[]);
         let arguments = ui::scroll(mtm, &list, 170.0);

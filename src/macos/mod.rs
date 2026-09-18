@@ -12,13 +12,7 @@ use objc2::{
     runtime::{AnyObject, ProtocolObject},
     sel,
 };
-use objc2_app_kit::{
-    NSAlert, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
-    NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSImage, NSMenu, NSMenuItem,
-    NSScreen, NSSegmentedControl, NSStatusBar, NSStatusItem, NSToolbar, NSToolbarDelegate,
-    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem, NSToolbarItemIdentifier, NSWorkspace,
-    NSWorkspaceDidWakeNotification,
-};
+use objc2_app_kit::*;
 use objc2_foundation::{
     NSAppleScript, NSArray, NSData, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
     NSNotification, NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration,
@@ -36,7 +30,9 @@ use crate::{
 
 mod file;
 mod profile;
+mod schedule;
 mod settings;
+mod shortcut;
 mod ui;
 mod window;
 
@@ -63,7 +59,7 @@ impl State {
 struct DelegateIvars {
     state: RefCell<State>,
     status_item: OnceCell<Retained<NSStatusItem>>,
-    settings: OnceCell<settings::Settings>,
+    settings: OnceCell<Retained<settings::Settings>>,
     window: OnceCell<window::Window>,
     profile: RefCell<Option<Retained<profile::Editor>>>,
     appearance_observed: Cell<bool>,
@@ -94,30 +90,93 @@ define_class!(
         #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
         fn toolbar_items(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSToolbarItemIdentifier>> {
             NSArray::from_slice(&[
+                unsafe { NSToolbarToggleSidebarItemIdentifier },
                 unsafe { NSToolbarFlexibleSpaceItemIdentifier },
-                ns_string!("schedule"),
+                ns_string!("mode"),
                 ns_string!("settings"),
             ])
         }
 
         #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
-        fn toolbar_item(&self, _toolbar: &NSToolbar, identifier: &NSToolbarItemIdentifier, _insert: bool) -> Option<Retained<NSToolbarItem>> {
+        fn toolbar_item(
+            &self,
+            _toolbar: &NSToolbar,
+            identifier: &NSToolbarItemIdentifier,
+            _insert: bool,
+        ) -> Option<Retained<NSToolbarItem>> {
             let item = match identifier.to_string().as_str() {
-                "schedule" => Some(("Schedule", "calendar", sel!(showSchedule:))),
+                "mode" => Some(("Appearance", "circle.lefthalf.filled", sel!(selectMode:))),
                 "settings" => Some(("Settings", "gearshape", sel!(showSettings:))),
                 _ => None,
             };
             item.map(|(title, symbol, action)| {
-                let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);
+                let item =
+                    NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);
                 item.setLabel(&NSString::from_str(title));
                 item.setImage(Some(&ui::symbol(symbol, title)));
                 item.setBordered(true);
-                unsafe {
-                    item.setTarget(Some(self));
-                    item.setAction(Some(action));
+                if identifier.to_string() == "mode" {
+                    let control = unsafe {
+                        NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                            &NSArray::from_retained_slice(&[
+                                NSString::from_str("Light"),
+                                NSString::from_str("Dark"),
+                            ]),
+                            NSSegmentSwitchTracking::SelectOne,
+                            Some(self),
+                            Some(action),
+                            self.mtm(),
+                        )
+                    };
+                    control.setControlSize(NSControlSize::Large);
+                    item.setView(Some(&control));
+                } else {
+                    unsafe {
+                        item.setTarget(Some(self));
+                        item.setAction(Some(action));
+                    }
                 }
                 item
             })
+        }
+    }
+
+    unsafe impl NSTableViewDataSource for Delegate {
+        #[unsafe(method(numberOfRowsInTableView:))]
+        fn navigation_rows(&self, _table: &NSTableView) -> isize {
+            2
+        }
+    }
+
+    unsafe impl NSControlTextEditingDelegate for Delegate {}
+
+    unsafe impl NSTableViewDelegate for Delegate {
+        #[unsafe(method_id(tableView:viewForTableColumn:row:))]
+        fn navigation_cell(
+            &self,
+            _table: &NSTableView,
+            _column: Option<&NSTableColumn>,
+            row: isize,
+        ) -> Option<Retained<NSView>> {
+            let (name, symbol) = if row == 0 {
+                ("Appearance", "circle.lefthalf.filled")
+            } else {
+                ("Schedule", "calendar")
+            };
+            let image = NSImageView::imageViewWithImage(&ui::symbol(symbol, name), self.mtm());
+            let title = ui::label(self.mtm(), name, 13.0);
+            Some(ui::stack(self.mtm(), true, &[&image, &title]).into_super())
+        }
+
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn navigation_changed(&self, notification: &NSNotification) {
+            if let Some(object) = notification.object()
+                && let Ok(table) = object.downcast::<NSTableView>()
+                && table.selectedRow() >= 0
+                && let Some(window) = self.ivars().window.get()
+            {
+                window.show_page(table.selectedRow());
+            }
         }
     }
 
@@ -129,118 +188,44 @@ define_class!(
 
         #[unsafe(method(selectMode:))]
         fn select_mode(&self, sender: &NSSegmentedControl) {
-            self.select(if sender.selectedSegment() == 0 { Mode::Light } else { Mode::Dark });
+            self.select(if sender.selectedSegment() == 0 {
+                Mode::Light
+            } else {
+                Mode::Dark
+            });
             self.update_window();
         }
 
         #[unsafe(method(editAppearance:))]
         fn edit_appearance(&self, sender: &NSButton) {
-            let mode = if sender.tag() == 0 { Mode::Light } else { Mode::Dark };
-            let profile = self.ivars().state.borrow().config.profile(mode).clone();
+            let window = self.ivars().window.get().unwrap();
+            window.window.makeFirstResponder(None);
+            let mode = if sender.tag() == 0 {
+                Mode::Light
+            } else {
+                Mode::Dark
+            };
+            let profile = self.config().profile(mode).clone();
             let editor = profile::Editor::new(self.mtm(), self, mode, profile);
-            editor.show(&self.ivars().window.get().unwrap().window);
+            window.inspect(editor.view());
             *self.ivars().profile.borrow_mut() = Some(editor);
         }
 
         #[unsafe(method(showSchedule:))]
         fn show_schedule(&self, _sender: &NSObject) {
-            self.open_settings(1);
-        }
-
-        #[unsafe(method(toggleMode:))]
-        fn toggle_mode(&self, _sender: &NSObject) {
-            self.toggle();
-        }
-
-        #[unsafe(method(toggleSchedule:))]
-        fn toggle_schedule(&self, _sender: &NSObject) {
-            let mut config = self.ivars().state.borrow().config.clone();
-            config.schedule.enabled = !config.schedule.enabled;
-
-            if let Err(error) = config.save() {
-                show_error(self.mtm(), "Could not save settings", &error.to_string());
-                self.update_window();
-                return;
-            }
-
-            self.ivars().state.borrow_mut().config = config;
-            self.schedule_next();
-            self.update_window();
+            self.open_window();
+            self.ivars().window.get().unwrap().show_page(1);
         }
 
         #[unsafe(method(showSettings:))]
         fn show_settings(&self, _sender: &NSObject) {
-            self.open_settings(0);
-        }
-
-        #[unsafe(method(addSchedule:))]
-        fn add_schedule(&self, _sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.add_rule(self, None);
-            }
-        }
-
-        #[unsafe(method(removeSchedule:))]
-        fn remove_schedule(&self, sender: &NSButton) {
-            if let Some(settings) = self.ivars().settings.get() {
-                settings.remove_rule(sender.tag() as usize);
-            }
-        }
-
-        #[unsafe(method(saveSettings:))]
-        fn save_settings(&self, _sender: &NSObject) {
-            let Some(settings) = self.ivars().settings.get() else {
-                return;
-            };
-            let config = match settings.config(&self.ivars().state.borrow().config) {
-                Ok(config) => config,
-                Err(error) => {
-                    settings.show_error(&error.to_string());
-                    return;
-                }
-            };
-            let old = self.ivars().state.borrow().config.clone();
-            let old_launch = launch_at_login();
-            let launch = settings.launch_at_login();
-
-            if let Err(error) = self.register_hotkey(&config.shortcut) {
-                settings.show_error(&error.to_string());
-                return;
-            }
-
-            if old_launch != launch
-                && let Err(error) = set_launch_at_login(launch)
-            {
-                _ = self.register_hotkey(&old.shortcut);
-                settings.show_error(&error);
-                return;
-            }
-
-            if let Err(error) = config.save() {
-                _ = self.register_hotkey(&old.shortcut);
-                if old_launch != launch {
-                    _ = set_launch_at_login(old_launch);
-                }
-                settings.show_error(&error.to_string());
-                return;
-            }
-
-            let mode = self.system_mode();
-            let profile_changed = old.profile(mode) != config.profile(mode);
-
-            self.ivars().state.borrow_mut().config = config;
-            if profile_changed {
-                self.ivars().state.borrow_mut().applied = None;
-                self.apply(mode);
-            }
-            self.schedule_next();
-            self.update_window();
+            self.open_settings();
         }
 
         #[unsafe(method(scheduleFired:))]
         fn schedule_fired(&self, _timer: &NSTimer) {
             let now = Zoned::now();
-            if let Some(mode) = self.ivars().state.borrow().config.schedule.current(&now) {
+            if let Some(mode) = self.config().schedule.current(&now) {
                 self.select(mode);
             }
             self.schedule_next();
@@ -439,19 +424,15 @@ impl Delegate {
             .ivars()
             .window
             .get_or_init(|| window::Window::new(self.mtm(), self));
-        self.update_window();
         window.show();
+        self.update_window();
     }
 
-    fn open_settings(&self, page: isize) {
+    fn open_settings(&self) {
         let settings = self
             .ivars()
             .settings
             .get_or_init(|| settings::Settings::new(self.mtm(), self));
-        if !settings.is_visible() {
-            settings.load(&self.ivars().state.borrow().config, self);
-        }
-        settings.select_page(page);
         settings.show();
     }
 
@@ -460,6 +441,40 @@ impl Delegate {
             let state = self.ivars().state.borrow();
             window.update(&state.config, self.system_mode(), state.next.as_ref());
         }
+        if let Some(settings) = self.ivars().settings.get() {
+            settings.update();
+        }
+    }
+
+    fn close_inspector(&self) {
+        if let Some(window) = self.ivars().window.get() {
+            window.close_inspector();
+        }
+    }
+
+    fn config(&self) -> Config {
+        self.ivars().state.borrow().config.clone()
+    }
+
+    fn save_config(&self, config: Config) -> Result<(), String> {
+        let old = self.config();
+        self.register_hotkey(&config.shortcut)
+            .map_err(|error| error.to_string())?;
+        if let Err(error) = config.save() {
+            if let Err(restore) = self.register_hotkey(&old.shortcut) {
+                return Err(format!("{error}\nShortcut: {restore}"));
+            }
+            return Err(error.to_string());
+        }
+        let mode = self.system_mode();
+        let changed = old.profile(mode) != config.profile(mode);
+        self.ivars().state.borrow_mut().config = config;
+        if changed {
+            self.ivars().state.borrow_mut().applied = None;
+            self.apply(mode);
+        }
+        self.schedule_next();
+        Ok(())
     }
 
     fn system_mode(&self) -> Mode {
@@ -562,14 +577,7 @@ impl Delegate {
             Mode::Light => config.light = profile,
             Mode::Dark => config.dark = profile,
         }
-        config.save().map_err(|error| error.to_string())?;
-        self.ivars().state.borrow_mut().config = config;
-        if self.system_mode() == mode {
-            self.ivars().state.borrow_mut().applied = None;
-            self.apply(mode);
-        }
-        self.update_window();
-        Ok(())
+        self.save_config(config)
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -624,7 +632,7 @@ impl Delegate {
             .as_ref()
             .is_some_and(|event| event.at.timestamp() <= now.timestamp());
 
-        if missed && let Some(mode) = self.ivars().state.borrow().config.schedule.current(&now) {
+        if missed && let Some(mode) = self.config().schedule.current(&now) {
             self.select(mode);
         }
         self.schedule_next();

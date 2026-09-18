@@ -54,19 +54,20 @@ pub fn stack(mtm: MainThreadMarker, horizontal: bool, views: &[&NSView]) -> Reta
 pub fn mount(parent: &NSView, child: &NSView, margin: f64) {
     parent.addSubview(child);
     child.setTranslatesAutoresizingMaskIntoConstraints(false);
+    let region = parent.safeAreaLayoutGuide();
     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
         child
             .leadingAnchor()
-            .constraintEqualToAnchor_constant(&parent.leadingAnchor(), margin),
+            .constraintEqualToAnchor_constant(&region.leadingAnchor(), margin),
         child
             .trailingAnchor()
-            .constraintEqualToAnchor_constant(&parent.trailingAnchor(), -margin),
+            .constraintEqualToAnchor_constant(&region.trailingAnchor(), -margin),
         child
             .topAnchor()
-            .constraintEqualToAnchor_constant(&parent.topAnchor(), margin),
+            .constraintEqualToAnchor_constant(&region.topAnchor(), margin),
         child
             .bottomAnchor()
-            .constraintEqualToAnchor_constant(&parent.bottomAnchor(), -margin),
+            .constraintLessThanOrEqualToAnchor_constant(&region.bottomAnchor(), -margin),
     ]));
 }
 
