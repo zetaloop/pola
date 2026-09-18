@@ -494,8 +494,12 @@ impl AppState {
         let at = event.at.timestamp().as_nanosecond();
         let milliseconds = ((at - now).max(1) / 1_000_000).clamp(1, u32::MAX as i128) as u32;
 
-        unsafe {
-            _ = SetTimer(Some(hwnd), TIMER_ID, milliseconds, None);
+        let timer = unsafe { SetTimer(Some(hwnd), TIMER_ID, milliseconds, None) };
+        if timer == 0 {
+            show_error(
+                "Could not schedule appearance change",
+                &windows::core::Error::from_thread().to_string(),
+            );
         }
     }
 
