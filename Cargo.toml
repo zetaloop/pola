@@ -30,5 +30,8 @@ windows-window = { git = "https://github.com/microsoft/windows-rs.git", version 
 windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0" }
 winresource = { version = "0.1.31", default-features = false }
 
+[profile.release]
+panic = "abort"
+
 [profile.MacOS]
 inherits = "release"
