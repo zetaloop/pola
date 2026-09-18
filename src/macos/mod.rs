@@ -225,9 +225,14 @@ define_class!(
                 return;
             }
 
+            let mode = self.system_mode();
+            let profile_changed = old.profile(mode) != config.profile(mode);
+
             self.ivars().state.borrow_mut().config = config;
-            self.ivars().state.borrow_mut().applied = None;
-            self.apply(self.system_mode());
+            if profile_changed {
+                self.ivars().state.borrow_mut().applied = None;
+                self.apply(mode);
+            }
             self.schedule_next();
             self.update_menu();
         }

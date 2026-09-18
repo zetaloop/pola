@@ -307,9 +307,14 @@ impl AppState {
             return Err(error.to_string());
         }
 
+        let mode = self.system_mode();
+        let profile_changed = old.profile(mode) != config.profile(mode);
+
         *self.config.borrow_mut() = config;
-        self.applied.set(None);
-        self.apply(self.system_mode());
+        if profile_changed {
+            self.applied.set(None);
+            self.apply(mode);
+        }
         self.schedule_next();
         Ok(())
     }
