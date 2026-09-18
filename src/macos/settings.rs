@@ -1,6 +1,5 @@
 use std::{cell::RefCell, path::PathBuf, str::FromStr};
 
-use global_hotkey::hotkey::HotKey;
 use jiff::civil::Time;
 use objc2::{AnyThread, MainThreadOnly, rc::Retained, sel};
 use objc2_app_kit::{
@@ -211,7 +210,6 @@ impl Settings {
 
     pub fn config(&self) -> Result<Config, Box<dyn std::error::Error>> {
         let shortcut = self.shortcut.stringValue().to_string();
-        HotKey::from_str(&shortcut)?;
 
         let rules = self
             .rules
