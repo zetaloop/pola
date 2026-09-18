@@ -14,14 +14,13 @@ Use the current Rust toolchain.
 cargo build --release
 ```
 
-Native packages are created with:
+On macOS, create the native app bundle with:
 
 ```sh
-scripts/package-macos.zsh
-scripts/package-windows.zsh
+cargo app
 ```
 
-The macOS script creates `target/release/pola.app`. The Windows build stages the self-contained Windows App Runtime beside `target/release/pola.exe`.
+The app is written to `target/pola.app`. On Windows, the release build stages the self-contained Windows App Runtime beside `target/release/pola.exe`.
 
 On macOS, changing the system appearance uses System Events and may request Automation permission.
 

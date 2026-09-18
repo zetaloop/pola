@@ -1,0 +1,2 @@
+[alias]
+app = ["build", "--profile", "MacOS", "--target-dir", "target/pola.app/Contents", "--config", "build.build-dir=\"target/app-build\""]
