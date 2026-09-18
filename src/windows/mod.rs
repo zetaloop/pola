@@ -95,7 +95,7 @@ impl AppState {
         self.add_message_window()?;
         self.add_icon()?;
 
-        let shortcut = self.config.borrow().general.shortcut.clone();
+        let shortcut = self.config.borrow().shortcut.clone();
         if let Err(error) = self.register_hotkey(&shortcut) {
             show_error("Could not register shortcut", &error.to_string());
         }
@@ -308,18 +308,18 @@ impl AppState {
         let old = self.config.borrow().clone();
         let old_launch = launch_at_login();
 
-        self.register_hotkey(&config.general.shortcut)
+        self.register_hotkey(&config.shortcut)
             .map_err(|error| error.to_string())?;
 
         if old_launch != launch
             && let Err(error) = set_launch_at_login(launch)
         {
-            _ = self.register_hotkey(&old.general.shortcut);
+            _ = self.register_hotkey(&old.shortcut);
             return Err(error);
         }
 
         if let Err(error) = config.save() {
-            _ = self.register_hotkey(&old.general.shortcut);
+            _ = self.register_hotkey(&old.shortcut);
             if old_launch != launch {
                 _ = set_launch_at_login(old_launch);
             }

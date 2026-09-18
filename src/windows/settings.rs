@@ -5,7 +5,7 @@ use windows_pickers::OpenFilePicker;
 use windows_reactor::*;
 
 use crate::{
-    config::{Command, Config, General, Profile},
+    config::{Command, Config, Profile},
     mode::Mode,
     schedule::{Rule, Schedule, Weekday},
 };
@@ -60,7 +60,7 @@ impl Draft {
             launch_at_login,
             schedule_enabled: config.schedule.enabled,
             apply_on_launch: config.schedule.apply_on_launch,
-            shortcut: config.general.shortcut,
+            shortcut: config.shortcut,
             rules: config
                 .schedule
                 .rules
@@ -101,9 +101,7 @@ impl Draft {
             .collect::<Result<Vec<_>, String>>()?;
 
         Ok(Config {
-            general: General {
-                shortcut: self.shortcut.clone(),
-            },
+            shortcut: self.shortcut.clone(),
             schedule: Schedule {
                 enabled: self.schedule_enabled,
                 apply_on_launch: self.apply_on_launch,

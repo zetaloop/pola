@@ -6,25 +6,22 @@ use crate::{mode::Mode, schedule::Schedule};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
-    pub general: General,
+    pub shortcut: String,
     pub schedule: Schedule,
     pub light: Profile,
     pub dark: Profile,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
-pub struct General {
-    pub shortcut: String,
-}
-
-impl Default for General {
+impl Default for Config {
     fn default() -> Self {
         Self {
             shortcut: "ctrl+shift+alt+d".into(),
+            schedule: Schedule::default(),
+            light: Profile::default(),
+            dark: Profile::default(),
         }
     }
 }

@@ -211,7 +211,7 @@ define_class!(
             let old_launch = launch_at_login();
             let launch = settings.launch_at_login();
 
-            if let Err(error) = self.register_hotkey(&config.general.shortcut) {
+            if let Err(error) = self.register_hotkey(&config.shortcut) {
                 settings.show_error(&error.to_string());
                 return;
             }
@@ -219,13 +219,13 @@ define_class!(
             if old_launch != launch
                 && let Err(error) = set_launch_at_login(launch)
             {
-                _ = self.register_hotkey(&old.general.shortcut);
+                _ = self.register_hotkey(&old.shortcut);
                 settings.show_error(&error);
                 return;
             }
 
             if let Err(error) = config.save() {
-                _ = self.register_hotkey(&old.general.shortcut);
+                _ = self.register_hotkey(&old.shortcut);
                 if old_launch != launch {
                     _ = set_launch_at_login(old_launch);
                 }
@@ -312,7 +312,7 @@ impl Delegate {
         self.build_menu();
         self.observe_system();
 
-        let shortcut = self.ivars().state.borrow().config.general.shortcut.clone();
+        let shortcut = self.ivars().state.borrow().config.shortcut.clone();
         if let Err(error) = self.register_hotkey(&shortcut) {
             show_error(
                 self.mtm(),

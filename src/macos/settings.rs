@@ -198,7 +198,7 @@ impl Settings {
                 NSControlStateValueOff
             });
         self.shortcut
-            .setStringValue(&NSString::from_str(&config.general.shortcut));
+            .setStringValue(&NSString::from_str(&config.shortcut));
 
         self.clear_rules();
         for rule in &config.schedule.rules {
@@ -221,7 +221,7 @@ impl Settings {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Config {
-            general: crate::config::General { shortcut },
+            shortcut,
             schedule: crate::schedule::Schedule {
                 enabled: self.schedule_enabled.state() == NSControlStateValueOn,
                 apply_on_launch: self.apply_on_launch.state() == NSControlStateValueOn,
