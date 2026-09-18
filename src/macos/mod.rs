@@ -10,9 +10,9 @@ use objc2::{
     runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::{
-    NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy,
-    NSApplicationDelegate, NSButton, NSMenu, NSMenuItem, NSScreen, NSStatusBar, NSStatusItem,
-    NSWorkspace, NSWorkspaceDidWakeNotification,
+    NSAlert, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSButton, NSMenu, NSMenuItem, NSScreen,
+    NSStatusBar, NSStatusItem, NSWorkspace, NSWorkspaceDidWakeNotification,
 };
 use objc2_foundation::{
     NSAppleScript, NSArray, NSDistributedNotificationCenter, NSNotification, NSNotificationCenter,
@@ -39,9 +39,9 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(config: Config) -> Self {
         Self {
-            config: Config::load().unwrap_or_default(),
+            config,
             applied: None,
             timer: None,
             next: None,
@@ -80,13 +80,15 @@ define_class!(
 
         #[unsafe(method(toggleSchedule:))]
         fn toggle_schedule(&self, _sender: &NSObject) {
-            {
-                let mut state = self.ivars().state.borrow_mut();
-                state.config.schedule.enabled = !state.config.schedule.enabled;
-                if let Err(error) = state.config.save() {
-                    eprintln!("failed to save config: {error}");
-                }
+            let mut config = self.ivars().state.borrow().config.clone();
+            config.schedule.enabled = !config.schedule.enabled;
+
+            if let Err(error) = config.save() {
+                show_error(self.mtm(), "Could not save settings", &error.to_string());
+                return;
             }
+
+            self.ivars().state.borrow_mut().config = config;
             self.schedule_next();
             self.update_menu();
         }
@@ -263,9 +265,9 @@ define_class!(
 );
 
 impl Delegate {
-    fn new(mtm: objc2_foundation::MainThreadMarker) -> Retained<Self> {
+    fn new(mtm: objc2_foundation::MainThreadMarker, config: Config) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
-            state: RefCell::new(State::new()),
+            state: RefCell::new(State::new(config)),
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
         });
@@ -650,10 +652,25 @@ fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     }
 }
 
+fn show_error(mtm: objc2_foundation::MainThreadMarker, title: &str, message: &str) {
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(message));
+    alert.runModal();
+}
+
 pub fn run() {
     let mtm = objc2_foundation::MainThreadMarker::new().expect("pola must run on the main thread");
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            show_error(mtm, "Could not load pola", &error.to_string());
+            return;
+        }
+    };
+
     let app = NSApplication::sharedApplication(mtm);
-    let delegate = Delegate::new(mtm);
+    let delegate = Delegate::new(mtm, config);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
 
     let address = &*delegate as *const Delegate as usize;

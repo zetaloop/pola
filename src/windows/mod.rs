@@ -15,9 +15,9 @@ use windows::{
         UI::{
             Shell::{DWPOS_SPAN, DesktopWallpaper, IDesktopWallpaper},
             WindowsAndMessaging::{
-                HWND_BROADCAST, KillTimer, PBT_APMRESUMEAUTOMATIC, SMTO_ABORTIFHUNG,
-                SendMessageTimeoutW, SetTimer, WM_POWERBROADCAST, WM_SETTINGCHANGE,
-                WM_THEMECHANGED, WM_TIMECHANGE, WM_TIMER,
+                HWND_BROADCAST, KillTimer, MB_ICONERROR, MB_OK, MessageBoxW,
+                PBT_APMRESUMEAUTOMATIC, SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetTimer,
+                WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMECHANGE, WM_TIMER,
             },
         },
     },
@@ -59,10 +59,10 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    fn new(app: &AppContext) -> Rc<Self> {
+    fn new(app: &AppContext, config: Config) -> Rc<Self> {
         Rc::new(Self {
             app: app.clone(),
-            config: RefCell::new(Config::load().unwrap_or_default()),
+            config: RefCell::new(config),
             applied: Cell::new(None),
             next: RefCell::new(None),
             icon: RefCell::new(None),
@@ -252,13 +252,15 @@ impl AppState {
     }
 
     fn toggle_schedule(&self) {
-        {
-            let mut config = self.config.borrow_mut();
-            config.schedule.enabled = !config.schedule.enabled;
-            if let Err(error) = config.save() {
-                eprintln!("failed to save config: {error}");
-            }
+        let mut config = self.config.borrow().clone();
+        config.schedule.enabled = !config.schedule.enabled;
+
+        if let Err(error) = config.save() {
+            show_error("Could not save settings", &error.to_string());
+            return;
         }
+
+        *self.config.borrow_mut() = config;
         self.schedule_next();
     }
 
@@ -517,9 +519,37 @@ fn set_launch_at_login(enabled: bool) -> Result<(), String> {
     }
 }
 
+fn show_error(title: &str, message: &str) {
+    let title = title
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let message = message
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    unsafe {
+        _ = MessageBoxW(
+            None,
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
 pub fn run() {
-    App::run_with(|app| {
-        let state = AppState::new(app);
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(error) => {
+            show_error("Could not load pola", &error.to_string());
+            return;
+        }
+    };
+
+    App::run_with(move |app| {
+        let state = AppState::new(app, config);
         state.start()?;
         Ok(state)
     })
