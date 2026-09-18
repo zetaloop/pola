@@ -7,7 +7,9 @@
     <key>CFBundleExecutable</key>
     <string>pola</string>
     <key>CFBundleIconFile</key>
-    <string>pola</string>
+    <string>Pola</string>
+    <key>CFBundleIconName</key>
+    <string>Pola</string>
     <key>CFBundleIdentifier</key>
     <string>io.github.zetaloop.pola</string>
     <key>CFBundleName</key>

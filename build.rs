@@ -1,6 +1,7 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 fn main() {
@@ -10,20 +11,34 @@ fn main() {
 
     match env::var("CARGO_CFG_TARGET_OS").as_deref() {
         Ok("windows") => windows(&out),
-        Ok("macos") if out.starts_with(root.join("target/app-build/MacOS")) => macos(&root),
+        Ok("macos") if out.starts_with(root.join("target/app-build/MacOS")) => macos(&root, &out),
         _ => {}
     }
 }
 
-fn macos(root: &Path) {
+fn macos(root: &Path, out: &Path) {
     println!("cargo:rerun-if-changed=assets/Info.plist");
-    println!("cargo:rerun-if-changed=assets/pola.icns");
+    println!("cargo:rerun-if-changed=assets/Pola.icon");
 
     let contents = root.join("target/pola.app/Contents");
     let resources = contents.join("Resources");
     fs::create_dir_all(&resources).expect("failed to create macOS app resources");
-    fs::copy("assets/pola.icns", resources.join("pola.icns"))
-        .expect("failed to stage macOS app icon");
+    let result = Command::new("xcrun")
+        .args(["actool", "assets/Pola.icon", "--compile"])
+        .arg(&resources)
+        .args([
+            "--app-icon",
+            "Pola",
+            "--platform",
+            "macosx",
+            "--minimum-deployment-target",
+            "26.0",
+            "--output-partial-info-plist",
+        ])
+        .arg(out.join("icon.plist"))
+        .status()
+        .expect("failed to run asset compiler");
+    assert!(result.success(), "failed to compile app icon");
 
     let plist = fs::read_to_string("assets/Info.plist")
         .expect("failed to read macOS app metadata")
