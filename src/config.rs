@@ -54,13 +54,6 @@ impl Config {
             Mode::Dark => &self.dark,
         }
     }
-
-    pub fn profile_mut(&mut self, mode: Mode) -> &mut Profile {
-        match mode {
-            Mode::Light => &mut self.light,
-            Mode::Dark => &mut self.dark,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
