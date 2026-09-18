@@ -9,9 +9,24 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
+    pub general: General,
     pub schedule: Schedule,
     pub light: Profile,
     pub dark: Profile,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct General {
+    pub shortcut: String,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            shortcut: "ctrl+shift+alt+d".into(),
+        }
+    }
 }
 
 impl Config {
@@ -62,6 +77,19 @@ pub struct Command {
     pub program: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+}
+
+impl Command {
+    pub fn run(&self) -> io::Result<()> {
+        let mut child = std::process::Command::new(&self.program)
+            .args(&self.args)
+            .spawn()?;
+
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
 }
 
 pub fn path() -> io::Result<PathBuf> {
