@@ -19,6 +19,7 @@ use objc2_foundation::{
     NSObject, NSObjectProtocol, NSString, NSSystemClockDidChangeNotification,
     NSSystemTimeZoneDidChangeNotification, NSTimer, NSURL,
 };
+use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
 use crate::{
     config::{Config, Profile},
@@ -196,13 +197,28 @@ define_class!(
             let Ok(config) = settings.config() else {
                 return;
             };
+            let old = self.ivars().state.borrow().config.clone();
+            let old_launch = launch_at_login();
+            let launch = settings.launch_at_login();
 
             if let Err(error) = self.register_hotkey(&config.general.shortcut) {
                 settings.show_error(&error.to_string());
                 return;
             }
 
+            if old_launch != launch
+                && let Err(error) = set_launch_at_login(launch)
+            {
+                _ = self.register_hotkey(&old.general.shortcut);
+                settings.show_error(&error);
+                return;
+            }
+
             if let Err(error) = config.save() {
+                _ = self.register_hotkey(&old.general.shortcut);
+                if old_launch != launch {
+                    _ = set_launch_at_login(old_launch);
+                }
                 settings.show_error(&error.to_string());
                 return;
             }
@@ -606,6 +622,31 @@ impl Delegate {
             self.select(mode);
         }
         self.schedule_next();
+    }
+}
+
+pub(super) fn launch_at_login() -> bool {
+    unsafe {
+        matches!(
+            SMAppService::mainAppService().status(),
+            SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
+        )
+    }
+}
+
+fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    if launch_at_login() == enabled {
+        return Ok(());
+    }
+
+    unsafe {
+        let service = SMAppService::mainAppService();
+        let result = if enabled {
+            service.registerAndReturnError()
+        } else {
+            service.unregisterAndReturnError()
+        };
+        result.map_err(|error| format!("{error:?}"))
     }
 }
 

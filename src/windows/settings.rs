@@ -34,6 +34,7 @@ impl PartialEq for SettingsInput {
 }
 
 struct Draft {
+    launch_at_login: bool,
     schedule_enabled: bool,
     apply_on_launch: bool,
     shortcut: String,
@@ -54,8 +55,9 @@ struct ProfileDraft {
 }
 
 impl Draft {
-    fn from_config(config: Config) -> Self {
+    fn from_config(config: Config, launch_at_login: bool) -> Self {
         Self {
+            launch_at_login,
             schedule_enabled: config.schedule.enabled,
             apply_on_launch: config.schedule.apply_on_launch,
             shortcut: config.general.shortcut,
@@ -160,6 +162,7 @@ pub(crate) struct Settings {
 #[derive(Clone)]
 pub(crate) enum Message {
     Activate,
+    LaunchAtLogin(bool),
     ScheduleEnabled(bool),
     ApplyOnLaunch(bool),
     Shortcut(String),
@@ -190,7 +193,7 @@ impl Component for Settings {
             .settings_opened(context.sender().callback(|()| Message::Activate));
         Self {
             state: Rc::clone(&input.0),
-            draft: Draft::from_config(input.0.config()),
+            draft: Draft::from_config(input.0.config(), input.0.launch_at_login()),
             status: String::new(),
         }
     }
@@ -202,6 +205,7 @@ impl Component for Settings {
                     self.status = "Could not activate the settings window.".into();
                 }
             }
+            Message::LaunchAtLogin(value) => self.draft.launch_at_login = value,
             Message::ScheduleEnabled(value) => self.draft.schedule_enabled = value,
             Message::ApplyOnLaunch(value) => self.draft.apply_on_launch = value,
             Message::Shortcut(value) => self.draft.shortcut = value,
@@ -294,7 +298,7 @@ impl Component for Settings {
             Message::Save => match self
                 .draft
                 .config()
-                .and_then(|config| self.state.save_config(config))
+                .and_then(|config| self.state.save_config(config, self.draft.launch_at_login))
             {
                 Ok(()) => self.status = "Saved".into(),
                 Err(error) => self.status = error,
@@ -362,6 +366,10 @@ impl Settings {
     fn general_view(&self, context: &mut ViewContext<Self>) -> View {
         Border::new().padding(Thickness::uniform(20.0)).content(
             StackPanel::new().spacing(14.0).children((
+                CheckBox::new()
+                    .is_checked(self.draft.launch_at_login)
+                    .on_is_checked_changed(context.callback(Message::LaunchAtLogin))
+                    .content("Launch at login"),
                 CheckBox::new()
                     .is_checked(self.draft.schedule_enabled)
                     .on_is_checked_changed(context.callback(Message::ScheduleEnabled))

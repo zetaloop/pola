@@ -52,6 +52,7 @@ struct ProfileControls {
 
 pub struct Settings {
     window: Retained<NSWindow>,
+    launch_at_login: Retained<NSButton>,
     schedule_enabled: Retained<NSButton>,
     apply_on_launch: Retained<NSButton>,
     shortcut: Retained<NSTextField>,
@@ -92,6 +93,17 @@ impl Settings {
         let light_tab = tab(&tabs, mtm, "Light");
         let dark_tab = tab(&tabs, mtm, "Dark");
 
+        let launch_at_login = unsafe {
+            NSButton::checkboxWithTitle_target_action(
+                &NSString::from_str("Launch at login"),
+                None,
+                None,
+                mtm,
+            )
+        };
+        launch_at_login.setFrame(rect(24.0, 356.0, 260.0, 24.0));
+        general.addSubview(&launch_at_login);
+
         let schedule_enabled = unsafe {
             NSButton::checkboxWithTitle_target_action(
                 &NSString::from_str("Enable schedule"),
@@ -100,7 +112,7 @@ impl Settings {
                 mtm,
             )
         };
-        schedule_enabled.setFrame(rect(24.0, 356.0, 260.0, 24.0));
+        schedule_enabled.setFrame(rect(24.0, 318.0, 260.0, 24.0));
         general.addSubview(&schedule_enabled);
 
         let apply_on_launch = unsafe {
@@ -111,15 +123,15 @@ impl Settings {
                 mtm,
             )
         };
-        apply_on_launch.setFrame(rect(24.0, 318.0, 260.0, 24.0));
+        apply_on_launch.setFrame(rect(24.0, 280.0, 260.0, 24.0));
         general.addSubview(&apply_on_launch);
 
         let shortcut_label = NSTextField::labelWithString(&NSString::from_str("Shortcut"), mtm);
-        shortcut_label.setFrame(rect(24.0, 268.0, 110.0, 24.0));
+        shortcut_label.setFrame(rect(24.0, 230.0, 110.0, 24.0));
         general.addSubview(&shortcut_label);
 
         let shortcut = NSTextField::textFieldWithString(&NSString::new(), mtm);
-        shortcut.setFrame(rect(140.0, 266.0, 260.0, 24.0));
+        shortcut.setFrame(rect(140.0, 228.0, 260.0, 24.0));
         general.addSubview(&shortcut);
 
         let schedule_scroll =
@@ -157,6 +169,7 @@ impl Settings {
 
         Self {
             window,
+            launch_at_login,
             schedule_enabled,
             apply_on_launch,
             shortcut,
@@ -168,6 +181,11 @@ impl Settings {
     }
 
     pub fn load(&self, config: &Config, delegate: &Delegate) {
+        self.launch_at_login.setState(if super::launch_at_login() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
         self.schedule_enabled.setState(if config.schedule.enabled {
             NSControlStateValueOn
         } else {
@@ -407,6 +425,10 @@ impl Settings {
 
     pub fn is_visible(&self) -> bool {
         self.window.isVisible()
+    }
+
+    pub fn launch_at_login(&self) -> bool {
+        self.launch_at_login.state() == NSControlStateValueOn
     }
 
     pub fn show(&self) {

@@ -38,6 +38,7 @@ mod settings;
 
 const TIMER_ID: usize = 1;
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 enum OpenWindow {
     Closed,
@@ -265,10 +266,32 @@ impl AppState {
         self.config.borrow().clone()
     }
 
-    pub(crate) fn save_config(&self, config: Config) -> Result<(), String> {
+    pub(crate) fn launch_at_login(&self) -> bool {
+        launch_at_login()
+    }
+
+    pub(crate) fn save_config(&self, config: Config, launch: bool) -> Result<(), String> {
+        let old = self.config.borrow().clone();
+        let old_launch = launch_at_login();
+
         self.register_hotkey(&config.general.shortcut)
             .map_err(|error| error.to_string())?;
-        config.save().map_err(|error| error.to_string())?;
+
+        if old_launch != launch
+            && let Err(error) = set_launch_at_login(launch)
+        {
+            _ = self.register_hotkey(&old.general.shortcut);
+            return Err(error);
+        }
+
+        if let Err(error) = config.save() {
+            _ = self.register_hotkey(&old.general.shortcut);
+            if old_launch != launch {
+                _ = set_launch_at_login(old_launch);
+            }
+            return Err(error.to_string());
+        }
+
         *self.config.borrow_mut() = config;
         self.applied.set(None);
         self.apply(self.system_mode());
@@ -467,6 +490,31 @@ fn icon_path() -> PathBuf {
         .ok()
         .and_then(|path| path.parent().map(|parent| parent.join("pola.ico")))
         .unwrap_or_else(|| PathBuf::from("pola.ico"))
+}
+
+fn launch_at_login() -> bool {
+    CURRENT_USER.open(RUN).is_ok_and(|key| {
+        key.values()
+            .is_ok_and(|mut values| values.any(|(name, _)| name.eq_ignore_ascii_case("pola")))
+    })
+}
+
+fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    if launch_at_login() == enabled {
+        return Ok(());
+    }
+
+    let key = CURRENT_USER
+        .create(RUN)
+        .map_err(|error| error.to_string())?;
+
+    if enabled {
+        let path = std::env::current_exe().map_err(|error| error.to_string())?;
+        key.set_string("pola", format!("\"{}\"", path.display()))
+            .map_err(|error| error.to_string())
+    } else {
+        key.remove_value("pola").map_err(|error| error.to_string())
+    }
 }
 
 pub fn run() {
