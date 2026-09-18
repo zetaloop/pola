@@ -79,7 +79,7 @@ impl AppState {
 
         let shortcut = self.config.borrow().general.shortcut.clone();
         if let Err(error) = self.register_hotkey(&shortcut) {
-            eprintln!("failed to register hotkey: {error}");
+            show_error("Could not register shortcut", &error.to_string());
         }
 
         let mode = {
@@ -548,10 +548,11 @@ pub fn run() {
         }
     };
 
-    App::run_with(move |app| {
+    if let Err(error) = App::run_with(move |app| {
         let state = AppState::new(app, config);
         state.start()?;
         Ok(state)
-    })
-    .unwrap();
+    }) {
+        show_error("Could not start pola", &error.to_string());
+    }
 }

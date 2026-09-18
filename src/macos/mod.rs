@@ -283,7 +283,11 @@ impl Delegate {
 
         let shortcut = self.ivars().state.borrow().config.general.shortcut.clone();
         if let Err(error) = self.register_hotkey(&shortcut) {
-            eprintln!("failed to register hotkey: {error}");
+            show_error(
+                self.mtm(),
+                "Could not register shortcut",
+                &error.to_string(),
+            );
         }
 
         let mode = {
