@@ -508,17 +508,18 @@ fn icon_path() -> PathBuf {
 }
 
 fn launch_at_login() -> bool {
-    CURRENT_USER.open(RUN).is_ok_and(|key| {
-        key.values()
-            .is_ok_and(|mut values| values.any(|(name, _)| name.eq_ignore_ascii_case("pola")))
-    })
+    let Ok(path) = std::env::current_exe() else {
+        return false;
+    };
+    let expected = format!("\"{}\"", path.display());
+
+    CURRENT_USER
+        .open(RUN)
+        .and_then(|key| key.get_string("pola"))
+        .is_ok_and(|value| value == expected)
 }
 
 fn set_launch_at_login(enabled: bool) -> Result<(), String> {
-    if launch_at_login() == enabled {
-        return Ok(());
-    }
-
     let key = CURRENT_USER
         .create(RUN)
         .map_err(|error| error.to_string())?;
@@ -527,8 +528,10 @@ fn set_launch_at_login(enabled: bool) -> Result<(), String> {
         let path = std::env::current_exe().map_err(|error| error.to_string())?;
         key.set_string("pola", format!("\"{}\"", path.display()))
             .map_err(|error| error.to_string())
-    } else {
+    } else if key.get_string("pola").is_ok() {
         key.remove_value("pola").map_err(|error| error.to_string())
+    } else {
+        Ok(())
     }
 }
 
