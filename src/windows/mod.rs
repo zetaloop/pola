@@ -184,7 +184,10 @@ impl AppState {
                 match event {
                     NotifyIconEvent::Activate { .. } => state.open_settings(),
                     NotifyIconEvent::ContextMenu { position } => state.show_menu(position),
-                    NotifyIconEvent::Unavailable => state.exit(),
+                    NotifyIconEvent::Unavailable => {
+                        show_error("Could not restore notification icon", "pola will exit.");
+                        state.exit();
+                    }
                     _ => {}
                 }
             })
