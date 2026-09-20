@@ -1,21 +1,20 @@
 use objc2::{AnyThread, MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSArray, NSEdgeInsets, NSIndexSet, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSIndexSet, NSSize, NSString};
 
-use super::{Delegate, schedule, ui};
+use super::{Delegate, profile, schedule, ui};
 use crate::{config::Config, mode::Mode, schedule::Event};
 
 pub struct Window {
     pub window: Retained<NSWindow>,
     split: Retained<NSSplitViewController>,
-    content: Retained<NSViewController>,
-    appearance: Retained<NSView>,
+    content: Retained<NSTabViewController>,
     pub schedule: Retained<schedule::Editor>,
     navigation: Retained<NSTableView>,
     inspector: Retained<NSSplitViewItem>,
-    images: [Retained<NSImageView>; 2],
-    proportions: Vec<Retained<NSLayoutConstraint>>,
-    captions: [Retained<NSTextField>; 2],
+    inspector_pages: Retained<NSTabViewController>,
+    _profiles: [Retained<profile::Editor>; 2],
+    previews: [Retained<NSButton>; 2],
     next: Retained<NSTextField>,
 }
 
@@ -26,15 +25,12 @@ impl Window {
         window.setContentMinSize(NSSize::new(620.0, 420.0));
         window.setFrameAutosaveName(&NSString::from_str("main"));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
-        let toolbar =
-            NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), &NSString::from_str("main"));
-        toolbar.setDelegate(Some(ProtocolObject::from_ref(delegate)));
-        window.setToolbar(Some(&toolbar));
 
         let navigation = NSTableView::new(mtm);
         navigation.setHeaderView(None);
         navigation.setStyle(NSTableViewStyle::SourceList);
-        navigation.setUsesAutomaticRowHeights(true);
+        navigation.setBackgroundColor(NSColor::clearColor().as_ref());
+        navigation.setRowSizeStyle(NSTableViewRowSizeStyle::Default);
         navigation.setAllowsEmptySelection(false);
         navigation.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         let column = NSTableColumn::initWithIdentifier(
@@ -52,123 +48,93 @@ impl Window {
         let sidebar = NSViewController::new(mtm);
         sidebar.setView(&sidebar_scroll);
         let sidebar = NSSplitViewItem::sidebarWithViewController(&sidebar);
-        sidebar.setMinimumThickness(150.0);
-        sidebar.setMaximumThickness(210.0);
-        sidebar.setCanCollapse(true);
 
-        let images = [NSImageView::new(mtm), NSImageView::new(mtm)];
-        let captions = [ui::label(mtm, "Light", 15.0), ui::label(mtm, "Dark", 15.0)];
-        let cards = ui::stack(mtm, true, &[]);
-        cards.setSpacing(20.0);
-        cards.setDistribution(NSStackViewDistribution::FillEqually);
-        let mut proportions = Vec::new();
-        for (index, image) in images.iter().enumerate() {
-            image.setImageScaling(NSImageScaling::ScaleProportionallyUpOrDown);
-            let background = NSBackgroundExtensionView::new(mtm);
-            background.setContentView(Some(image));
-            proportions.push(
-                background
-                    .heightAnchor()
-                    .constraintEqualToAnchor_multiplier(&background.widthAnchor(), 0.85),
-            );
-            let edit = ui::button(mtm, "Edit…", delegate, sel!(editAppearance:));
-            edit.setTag(index as isize);
-            edit.setBordered(false);
-            let bar = ui::stack(mtm, true, &[&captions[index], &edit]);
-            bar.setDistribution(NSStackViewDistribution::EqualSpacing);
-            bar.setEdgeInsets(NSEdgeInsets {
-                top: 8.0,
-                left: 14.0,
-                bottom: 8.0,
-                right: 14.0,
+        let previews = [
+            ui::button(mtm, "Light", delegate, sel!(editAppearance:)),
+            ui::button(mtm, "Dark", delegate, sel!(editAppearance:)),
+        ];
+        for (index, preview) in previews.iter().enumerate() {
+            preview.setTag(index as isize);
+            preview.setControlSize(NSControlSize::Large);
+            preview.setBezelStyle(NSBezelStyle::FlexiblePush);
+            preview.setBorderShape(NSControlBorderShape::RoundedRectangle);
+            preview.setImagePosition(NSCellImagePosition::ImageAbove);
+            preview.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+            preview.setToolTip(Some(&NSString::from_str(if index == 0 {
+                "Edit light appearance"
+            } else {
+                "Edit dark appearance"
+            })));
+            let appearance = NSAppearance::appearanceNamed(unsafe {
+                if index == 0 {
+                    NSAppearanceNameAqua
+                } else {
+                    NSAppearanceNameDarkAqua
+                }
             });
-            let glass = NSGlassEffectView::new(mtm);
-            glass.setContentView(Some(&bar));
-            glass.setCornerRadius(999.0);
-            unsafe {
-                let _: () = objc2::msg_send![&glass, setEffectIsInteractive: true];
-            }
-            background.addSubview(&glass);
-            glass.setTranslatesAutoresizingMaskIntoConstraints(false);
-            background
-                .heightAnchor()
-                .constraintGreaterThanOrEqualToAnchor_multiplier_constant(
-                    &glass.heightAnchor(),
-                    1.0,
-                    16.0,
-                )
-                .setActive(true);
-            NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-                glass
-                    .leadingAnchor()
-                    .constraintEqualToAnchor_constant(&background.leadingAnchor(), 8.0),
-                glass
-                    .trailingAnchor()
-                    .constraintEqualToAnchor_constant(&background.trailingAnchor(), -8.0),
-                glass
-                    .bottomAnchor()
-                    .constraintEqualToAnchor_constant(&background.bottomAnchor(), -8.0),
-            ]));
-            cards.addArrangedSubview(&background);
+            preview.setAppearance(appearance.as_deref());
         }
-        let glass_group = NSGlassEffectContainerView::new(mtm);
-        glass_group.setContentView(Some(&cards));
-        let title = ui::label(mtm, "Appearance", 26.0);
+        let choices = ui::stack(mtm, true, &[&previews[0], &previews[1]]);
+        choices.setDistribution(NSStackViewDistribution::FillEqually);
+        let title = ui::heading(mtm, "Appearance");
         let next = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
         next.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        let schedule = ui::button(mtm, "Edit schedule…", delegate, sel!(showSchedule:));
-        let summary = ui::stack(mtm, true, &[&next, &schedule]);
+        let schedule_action = ui::button(mtm, "Edit schedule…", delegate, sel!(showSchedule:));
+        let summary = ui::stack(mtm, true, &[&next, &schedule_action]);
         summary.setDistribution(NSStackViewDistribution::EqualSpacing);
-        let body = ui::stack(mtm, false, &[&title, &glass_group, &summary]);
-        body.setSpacing(16.0);
-        for view in [&*glass_group as &NSView, &*summary] {
-            view.widthAnchor()
+        let body = ui::stack(mtm, false, &[&title, &choices, &summary]);
+        body.setSpacing(24.0);
+        for row in [&*choices, &*summary] {
+            row.widthAnchor()
                 .constraintEqualToAnchor(&body.widthAnchor())
                 .setActive(true);
         }
         let appearance = NSView::new(mtm);
         ui::mount(&appearance, &body, 24.0);
-        let content = NSViewController::new(mtm);
-        content.setView(&appearance);
+        let schedule = schedule::Editor::new(mtm, delegate);
+        let content = ui::pages(mtm, &[&appearance, schedule.view()]);
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content);
         content_item.setAutomaticallyAdjustsSafeAreaInsets(true);
-        content_item.setMinimumThickness(460.0);
 
-        let inspector_view = NSViewController::new(mtm);
-        inspector_view.setView(&NSView::new(mtm));
-        let inspector = NSSplitViewItem::inspectorWithViewController(&inspector_view);
-        inspector.setMinimumThickness(300.0);
-        inspector.setMaximumThickness(420.0);
-        inspector.setCanCollapse(true);
+        let config = delegate.config();
+        let profiles = [
+            profile::Editor::new(mtm, delegate, Mode::Light, config.light),
+            profile::Editor::new(mtm, delegate, Mode::Dark, config.dark),
+        ];
+        let inspector_pages = ui::pages(mtm, &[profiles[0].view(), profiles[1].view()]);
+        inspector_pages
+            .setSelectedTabViewItemIndex(isize::from(delegate.system_mode() == Mode::Dark));
+        let inspector = NSSplitViewItem::inspectorWithViewController(&inspector_pages);
         inspector.setCollapsed(true);
         let split = NSSplitViewController::new(mtm);
         split.addSplitViewItem(&sidebar);
         split.addSplitViewItem(&content_item);
         split.addSplitViewItem(&inspector);
         window.setContentViewController(Some(&split));
+
+        let toolbar =
+            NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), &NSString::from_str("main"));
+        toolbar.setDelegate(Some(ProtocolObject::from_ref(delegate)));
+        window.setToolbar(Some(&toolbar));
+        toolbar.setVisible(true);
         navigation.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
-        let schedule = schedule::Editor::new(mtm, delegate);
         Self {
             window,
             split,
             content,
-            appearance,
             schedule,
             navigation,
             inspector,
-            images,
-            proportions,
-            captions,
+            inspector_pages,
+            _profiles: profiles,
+            previews,
             next,
         }
     }
 
     pub fn show_page(&self, page: isize) {
-        self.content.setView(if page == 1 {
-            self.schedule.view()
-        } else {
-            &self.appearance
-        });
+        self.window.makeFirstResponder(None);
+        self.content.setSelectedTabViewItemIndex(page);
         if self.navigation.selectedRow() != page {
             self.navigation.selectRowIndexes_byExtendingSelection(
                 &NSIndexSet::indexSetWithIndex(page as usize),
@@ -180,18 +146,11 @@ impl Window {
         }
     }
 
-    pub fn inspect(&self, view: &NSView) {
+    pub fn inspect(&self, mode: Mode) {
         self.show_page(0);
-        self.inspector
-            .viewController(self.window.mtm())
-            .setView(view);
+        self.inspector_pages
+            .setSelectedTabViewItemIndex(isize::from(mode == Mode::Dark));
         if self.inspector.isCollapsed() {
-            unsafe { self.split.toggleInspector(None) };
-        }
-    }
-
-    pub fn close_inspector(&self) {
-        if !self.inspector.isCollapsed() {
             unsafe { self.split.toggleInspector(None) };
         }
     }
@@ -216,23 +175,22 @@ impl Window {
             } else {
                 "Schedule is off".into()
             }));
-        let workspace = NSWorkspace::sharedWorkspace();
-        let desktop = NSScreen::mainScreen(self.window.mtm())
-            .and_then(|screen| workspace.desktopImageURLForScreen(&screen))
-            .and_then(|url| url.path());
         for (index, profile) in [&config.light, &config.dark].into_iter().enumerate() {
-            let path = profile
-                .wallpaper
-                .as_ref()
-                .map(|path| NSString::from_str(&path.to_string_lossy()))
-                .or_else(|| desktop.clone());
-            let image =
-                path.and_then(|path| NSImage::initWithContentsOfFile(NSImage::alloc(), &path));
-            self.proportions[index].setActive(image.is_some());
-            self.images[index].setImage(image.as_deref());
+            let image = profile.wallpaper.as_ref().and_then(|path| {
+                NSImage::initWithContentsOfFile(
+                    NSImage::alloc(),
+                    &NSString::from_str(&path.to_string_lossy()),
+                )
+            });
+            if let Some(image) = &image {
+                let size = image.size();
+                let scale = (160.0 / size.width).min(100.0 / size.height).min(1.0);
+                image.setSize(NSSize::new(size.width * scale, size.height * scale));
+            }
+            self.previews[index].setImage(image.as_deref());
             let title = if index == 0 { "Light" } else { "Dark" };
             let selected = (index == 0) == (mode == Mode::Light);
-            self.captions[index].setStringValue(&NSString::from_str(&if selected {
+            self.previews[index].setTitle(&NSString::from_str(&if selected {
                 format!("{title} · Active")
             } else {
                 title.into()

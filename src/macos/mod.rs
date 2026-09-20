@@ -61,7 +61,6 @@ struct DelegateIvars {
     status_item: OnceCell<Retained<NSStatusItem>>,
     settings: OnceCell<Retained<settings::Settings>>,
     window: OnceCell<window::Window>,
-    profile: RefCell<Option<Retained<profile::Editor>>>,
     appearance_observed: Cell<bool>,
 }
 
@@ -89,12 +88,15 @@ define_class!(
     unsafe impl NSToolbarDelegate for Delegate {
         #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
         fn toolbar_items(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSToolbarItemIdentifier>> {
-            NSArray::from_slice(&[
-                unsafe { NSToolbarToggleSidebarItemIdentifier },
-                unsafe { NSToolbarFlexibleSpaceItemIdentifier },
-                ns_string!("mode"),
-                ns_string!("settings"),
-            ])
+            toolbar_identifiers()
+        }
+
+        #[unsafe(method_id(toolbarAllowedItemIdentifiers:))]
+        fn toolbar_allowed_items(
+            &self,
+            _toolbar: &NSToolbar,
+        ) -> Retained<NSArray<NSToolbarItemIdentifier>> {
+            toolbar_identifiers()
         }
 
         #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
@@ -163,9 +165,7 @@ define_class!(
             } else {
                 ("Schedule", "calendar")
             };
-            let image = NSImageView::imageViewWithImage(&ui::symbol(symbol, name), self.mtm());
-            let title = ui::label(self.mtm(), name, 13.0);
-            Some(ui::stack(self.mtm(), true, &[&image, &title]).into_super())
+            Some(ui::cell(self.mtm(), name, Some(&ui::symbol(symbol, name))).into_super())
         }
 
         #[unsafe(method(tableViewSelectionDidChange:))]
@@ -205,10 +205,7 @@ define_class!(
             } else {
                 Mode::Dark
             };
-            let profile = self.config().profile(mode).clone();
-            let editor = profile::Editor::new(self.mtm(), self, mode, profile);
-            window.inspect(editor.view());
-            *self.ivars().profile.borrow_mut() = Some(editor);
+            window.inspect(mode);
         }
 
         #[unsafe(method(showSchedule:))]
@@ -278,7 +275,6 @@ impl Delegate {
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
             window: OnceCell::new(),
-            profile: RefCell::new(None),
             appearance_observed: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
@@ -443,12 +439,6 @@ impl Delegate {
         }
         if let Some(settings) = self.ivars().settings.get() {
             settings.update();
-        }
-    }
-
-    fn close_inspector(&self) {
-        if let Some(window) = self.ivars().window.get() {
-            window.close_inspector();
         }
     }
 
@@ -637,6 +627,16 @@ impl Delegate {
         }
         self.schedule_next();
     }
+}
+
+fn toolbar_identifiers() -> Retained<NSArray<NSToolbarItemIdentifier>> {
+    NSArray::from_slice(&[
+        unsafe { NSToolbarToggleSidebarItemIdentifier },
+        unsafe { NSToolbarFlexibleSpaceItemIdentifier },
+        ns_string!("mode"),
+        unsafe { NSToolbarToggleInspectorItemIdentifier },
+        ns_string!("settings"),
+    ])
 }
 
 pub(super) fn launch_at_login() -> bool {

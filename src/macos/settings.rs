@@ -7,7 +7,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOn, NSStackViewDistribution, NSSwitch, NSTextField, NSWindow,
+    NSColor, NSControlStateValueOn, NSGridCellPlacement, NSSwitch, NSTextField, NSWindow,
     NSWindowDelegate,
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSString};
@@ -87,45 +87,38 @@ impl Settings {
         this.ivars()
             .window
             .setDelegate(Some(ProtocolObject::from_ref(&*this)));
-        let content = ui::stack(mtm, false, &[]);
-        for (label, control, action) in [
-            (
-                "Launch at login",
-                &this.ivars().launch,
-                sel!(launchChanged:),
-            ),
-            (
-                "Apply schedule on launch",
-                &this.ivars().apply,
-                sel!(applyChanged:),
-            ),
+        for (control, action) in [
+            (&this.ivars().launch, sel!(launchChanged:)),
+            (&this.ivars().apply, sel!(applyChanged:)),
         ] {
             unsafe {
                 control.setTarget(Some(&this));
                 control.setAction(Some(action));
             }
-            let label = ui::label(mtm, label, 13.0);
-            let row = ui::stack(mtm, true, &[&label, control]);
-            row.setDistribution(NSStackViewDistribution::EqualSpacing);
-            content.addArrangedSubview(&row);
-            row.widthAnchor()
-                .constraintEqualToAnchor(&content.widthAnchor())
-                .setActive(true);
         }
+        let launch_label = ui::label(mtm, "Launch at login");
+        let apply_label = ui::label(mtm, "Apply schedule on launch");
         let recorder = this
             .ivars()
             .recorder
             .get_or_init(|| Recorder::new(mtm, &this));
         let clear = ui::button(mtm, "Clear", &this, sel!(clearShortcut:));
-        let shortcut_label = ui::label(mtm, "Global shortcut", 13.0);
+        let shortcut_label = ui::label(mtm, "Global shortcut");
         let controls = ui::stack(mtm, true, &[recorder, &clear]);
-        let row = ui::stack(mtm, true, &[&shortcut_label, &controls]);
-        row.setDistribution(NSStackViewDistribution::EqualSpacing);
-        content.addArrangedSubview(&row);
-        row.widthAnchor()
+        let form = ui::form(
+            mtm,
+            &[
+                [&launch_label, &this.ivars().launch],
+                [&apply_label, &this.ivars().apply],
+                [&shortcut_label, &controls],
+            ],
+        );
+        form.columnAtIndex(1)
+            .setXPlacement(NSGridCellPlacement::Trailing);
+        let content = ui::stack(mtm, false, &[&form, &this.ivars().error]);
+        form.widthAnchor()
             .constraintEqualToAnchor(&content.widthAnchor())
             .setActive(true);
-        content.addArrangedSubview(&this.ivars().error);
         this.ivars()
             .error
             .widthAnchor()

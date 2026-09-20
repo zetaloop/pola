@@ -3,12 +3,10 @@ use objc2::{
     rc::Retained,
     runtime::{AnyObject, Sel},
 };
-use objc2_app_kit::{
-    NSApplication, NSBackingStoreType, NSButton, NSFont, NSImage, NSLayoutAttribute,
-    NSLayoutConstraint, NSScrollView, NSStackView, NSTextField, NSUserInterfaceLayoutOrientation,
-    NSView, NSWindow, NSWindowStyleMask,
+use objc2_app_kit::*;
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString,
 };
-use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSSize, NSString};
 
 pub fn window(mtm: MainThreadMarker, title: &str, width: f64, height: f64) -> Retained<NSWindow> {
     let window = unsafe {
@@ -51,6 +49,23 @@ pub fn stack(mtm: MainThreadMarker, horizontal: bool, views: &[&NSView]) -> Reta
     stack
 }
 
+pub fn form(mtm: MainThreadMarker, rows: &[[&NSView; 2]]) -> Retained<NSGridView> {
+    let rows: Vec<_> = rows.iter().map(|row| NSArray::from_slice(row)).collect();
+    let form = NSGridView::gridViewWithViews(&NSArray::from_retained_slice(&rows), mtm);
+    form.setRowSpacing(16.0);
+    form.columnAtIndex(0)
+        .setXPlacement(NSGridCellPlacement::Leading);
+    form.columnAtIndex(1)
+        .setXPlacement(NSGridCellPlacement::Fill);
+    form
+}
+
+pub fn actions(mtm: MainThreadMarker, views: &[&NSView]) -> Retained<NSStackView> {
+    let actions = stack(mtm, true, &[]);
+    actions.setViews_inGravity(&NSArray::from_slice(views), NSStackViewGravity::Trailing);
+    actions
+}
+
 pub fn mount(parent: &NSView, child: &NSView, margin: f64) {
     parent.addSubview(child);
     child.setTranslatesAutoresizingMaskIntoConstraints(false);
@@ -71,35 +86,62 @@ pub fn mount(parent: &NSView, child: &NSView, margin: f64) {
     ]));
 }
 
-pub fn scroll(mtm: MainThreadMarker, content: &NSView, height: f64) -> Retained<NSScrollView> {
-    let scroll = NSScrollView::new(mtm);
-    scroll.setHasVerticalScroller(true);
-    scroll.setDrawsBackground(false);
-    scroll
-        .heightAnchor()
-        .constraintEqualToConstant(height)
-        .setActive(true);
-    scroll.setDocumentView(Some(content));
-    content.setTranslatesAutoresizingMaskIntoConstraints(false);
-    let clip = scroll.contentView();
-    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
-        content
-            .leadingAnchor()
-            .constraintEqualToAnchor(&clip.leadingAnchor()),
-        content
-            .topAnchor()
-            .constraintEqualToAnchor(&clip.topAnchor()),
-        content
-            .widthAnchor()
-            .constraintEqualToAnchor(&clip.widthAnchor()),
-    ]));
-    scroll
+pub fn label(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
+    NSTextField::labelWithString(&NSString::from_str(text), mtm)
 }
 
-pub fn label(mtm: MainThreadMarker, text: &str, size: f64) -> Retained<NSTextField> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setFont(Some(&NSFont::systemFontOfSize(size)));
+pub fn heading(mtm: MainThreadMarker, text: &str) -> Retained<NSTextField> {
+    let label = label(mtm, text);
+    let font = unsafe {
+        NSFont::preferredFontForTextStyle_options(NSFontTextStyleTitle2, &NSDictionary::new())
+    };
+    label.setFont(Some(&font));
     label
+}
+
+pub fn table(mtm: MainThreadMarker, title: &str) -> Retained<NSTableView> {
+    let table = NSTableView::new(mtm);
+    table.setHeaderView(None);
+    table.setStyle(NSTableViewStyle::Inset);
+    table.setRowSizeStyle(NSTableViewRowSizeStyle::Default);
+    table.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    let column =
+        NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), &NSString::from_str(title));
+    column.setTitle(&NSString::from_str(title));
+    table.addTableColumn(&column);
+    table
+}
+
+pub fn cell(
+    mtm: MainThreadMarker,
+    text: &str,
+    image: Option<&NSImage>,
+) -> Retained<NSTableCellView> {
+    let cell = NSTableCellView::new(mtm);
+    let text = label(mtm, text);
+    cell.addSubview(&text);
+    unsafe { cell.setTextField(Some(&text)) };
+    if let Some(image) = image {
+        let image = NSImageView::imageViewWithImage(image, mtm);
+        cell.addSubview(&image);
+        unsafe { cell.setImageView(Some(&image)) };
+    }
+    cell
+}
+
+pub fn pages(mtm: MainThreadMarker, views: &[&NSView]) -> Retained<NSTabViewController> {
+    let pages = NSTabViewController::new(mtm);
+    pages.setTabStyle(NSTabViewControllerTabStyle::Unspecified);
+    pages
+        .tabView()
+        .setTabViewType(NSTabViewType::NoTabsNoBorder);
+    pages.tabView().setDrawsBackground(false);
+    for view in views {
+        let controller = NSViewController::new(mtm);
+        controller.setView(view);
+        pages.addTabViewItem(&NSTabViewItem::tabViewItemWithViewController(&controller));
+    }
+    pages
 }
 
 pub fn button(

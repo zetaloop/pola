@@ -85,7 +85,7 @@ define_class!(
                     Some("time") => rule.time.strftime("%H:%M").to_string(),
                     _ => rule.mode.to_string(),
                 };
-                ui::label(self.mtm(), &text, 13.0).into_super().into_super()
+                ui::cell(self.mtm(), &text, None).into_super()
             })
         }
     }
@@ -196,7 +196,7 @@ impl Editor {
     pub fn new(mtm: MainThreadMarker, owner: &Delegate) -> Retained<Self> {
         let view = NSView::new(mtm);
         let table = NSTableView::new(mtm);
-        table.setUsesAutomaticRowHeights(true);
+        table.setRowSizeStyle(NSTableViewRowSizeStyle::Default);
         table.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         table.setStyle(NSTableViewStyle::Inset);
         for (name, title, width) in [
@@ -236,7 +236,7 @@ impl Editor {
             this.ivars().enabled.setTarget(Some(&this));
             this.ivars().enabled.setAction(Some(sel!(enabledChanged:)));
         }
-        let heading = ui::label(mtm, "Schedule", 24.0);
+        let heading = ui::heading(mtm, "Schedule");
         let header = ui::stack(mtm, true, &[&heading, &this.ivars().enabled]);
         header.setDistribution(NSStackViewDistribution::EqualSpacing);
         let scroll = NSScrollView::new(mtm);
@@ -295,7 +295,7 @@ impl Editor {
                 mode: Mode::Dark,
             });
         let mtm = self.mtm();
-        let window = ui::window(mtm, "Arrangement", 480.0, 260.0);
+        let window = ui::window(mtm, "Arrangement", 560.0, 300.0);
         let days = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
                 &NSArray::from_retained_slice(&NAMES.map(NSString::from_str)),
@@ -305,10 +305,12 @@ impl Editor {
                 mtm,
             )
         };
+        days.setControlSize(NSControlSize::Large);
         for (i, day) in DAYS.into_iter().enumerate() {
             days.setSelected_forSegment(rule.days.contains(&day), i as isize);
         }
         let time = NSDatePicker::new(mtm);
+        time.setControlSize(NSControlSize::Large);
         time.setDatePickerElements(NSDatePickerElementFlags::HourMinute);
         time.setDatePickerStyle(NSDatePickerStyle::TextFieldAndStepper);
         time.setTimeZone(Some(&NSTimeZone::timeZoneForSecondsFromGMT(0)));
@@ -328,15 +330,37 @@ impl Editor {
             )
         };
         mode.setSelectedSegment(isize::from(rule.mode == Mode::Dark));
-        let row = ui::stack(mtm, true, &[&time, &mode]);
+        mode.setControlSize(NSControlSize::Large);
+        let days_label = ui::label(mtm, "Days");
+        let time_label = ui::label(mtm, "Time");
+        let mode_label = ui::label(mtm, "Appearance");
+        let form = ui::form(
+            mtm,
+            &[
+                [&days_label, &days],
+                [&time_label, &time],
+                [&mode_label, &mode],
+            ],
+        );
+        form.columnAtIndex(1)
+            .setXPlacement(NSGridCellPlacement::Leading);
         let save = ui::button(mtm, "Save", self, sel!(saveRule:));
+        save.setControlSize(NSControlSize::Large);
         save.setKeyEquivalent(&NSString::from_str("\r"));
         let cancel = ui::button(mtm, "Cancel", self, sel!(cancelRule:));
+        cancel.setControlSize(NSControlSize::Large);
         cancel.setKeyEquivalent(&NSString::from_str("\u{1b}"));
-        let actions = ui::stack(mtm, true, &[&cancel, &save]);
-        let error = ui::label(mtm, "", 13.0);
+        let actions = ui::actions(mtm, &[&cancel, &save]);
+        let error = ui::label(mtm, "");
         error.setTextColor(Some(&NSColor::systemRedColor()));
-        let content = ui::stack(mtm, false, &[&days, &row, &error, &actions]);
+        let content = ui::stack(mtm, false, &[&form, &error, &actions]);
+        form.widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
+        actions
+            .widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
         ui::mount(&window.contentView().unwrap(), &content, 24.0);
         self.view()
             .window()
