@@ -5,7 +5,9 @@ use std::{
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, LPARAM, WPARAM},
+        Foundation::{
+            CloseHandle, E_FAIL, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, LPARAM, WPARAM,
+        },
         System::Threading::CreateMutexW,
         UI::WindowsAndMessaging::{
             FindWindowW, MB_ICONERROR, MB_OK, MessageBoxW, PostMessageW, WM_ACTIVATEAPP, WM_APP,
@@ -14,6 +16,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 use windows_reactor::*;
+use windows_result::{Error, HRESULT};
 use windows_window::Window;
 
 use crate::{
@@ -76,7 +79,15 @@ impl AppState {
     }
 
     fn start(self: &Rc<Self>) -> windows_window::Result<()> {
-        locale::apply().map_err(std::io::Error::other)?;
+        locale::apply().map_err(|error| {
+            Error::new(
+                HRESULT(E_FAIL.0),
+                tr!(
+                    "Could not apply the interface language: {error}",
+                    error = error
+                ),
+            )
+        })?;
         let state = Rc::downgrade(self);
         let window = Window::new("io.github.zetaloop.pola.frontend")
             .visible(false)
@@ -285,7 +296,15 @@ pub fn run() -> Result<(), String> {
                 eprintln!("Window notification: {dispatch_error}");
             }
         })
-        .map_err(std::io::Error::other)?;
+        .map_err(|error| {
+            Error::new(
+                HRESULT(E_FAIL.0),
+                tr!(
+                    "Could not connect to the background process: {error}",
+                    error = error
+                ),
+            )
+        })?;
         let state = AppState::new(app, client, instance);
         APP.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&state)));
         state.start()?;

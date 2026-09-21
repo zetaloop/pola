@@ -392,6 +392,12 @@ macro_rules! zh {
     ("Could not change appearance") => {
         "无法切换外观"
     };
+    ("Could not apply the interface language: {error}") => {
+        "无法应用界面语言：{error}"
+    };
+    ("Could not connect to the background process: {error}") => {
+        "无法连接后台进程：{error}"
+    };
     ("Could not start pola") => {
         "无法启动 pola"
     };

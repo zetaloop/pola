@@ -28,6 +28,7 @@ windows-core = "0.62.2"
 windows-pickers = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0", features = ["reactor"] }
 windows-reactor = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0" }
 windows-registry = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0" }
+windows-result = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0" }
 windows-window = { git = "https://github.com/microsoft/windows-rs.git", version = "0.100.0" }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]

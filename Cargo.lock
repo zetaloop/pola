@@ -359,6 +359,7 @@ dependencies = [
  "windows-reactor",
  "windows-reactor-setup",
  "windows-registry",
+ "windows-result 0.100.0",
  "windows-window",
  "winresource",
 ]
