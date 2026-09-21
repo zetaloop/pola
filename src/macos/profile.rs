@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use crate::locale::tr;
+
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
@@ -162,7 +164,10 @@ impl Editor {
         let name = NSTextField::textFieldWithString(&NSString::from_str(&profile.name), mtm);
         let when = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &NSArray::from_slice(&[ns_string!("Light"), ns_string!("Dark")]),
+                &NSArray::from_slice(&[
+                    &*NSString::from_str(tr!("Light")),
+                    &*NSString::from_str(tr!("Dark")),
+                ]),
                 NSSegmentSwitchTracking::SelectAny,
                 None,
                 Some(sel!(whenChanged:)),
@@ -174,7 +179,7 @@ impl Editor {
         }
         let run = unsafe {
             NSButton::buttonWithTitle_target_action(
-                ns_string!("Run"),
+                &NSString::from_str(tr!("Run")),
                 None,
                 Some(sel!(runProfile:)),
                 mtm,
@@ -182,7 +187,7 @@ impl Editor {
         };
         let edit = unsafe {
             NSButton::buttonWithTitle_target_action(
-                ns_string!("Edit"),
+                &NSString::from_str(tr!("Edit")),
                 None,
                 Some(sel!(editAction:)),
                 mtm,
@@ -190,7 +195,7 @@ impl Editor {
         };
         let remove = unsafe {
             NSButton::buttonWithTitle_target_action(
-                ns_string!("Remove"),
+                &NSString::from_str(tr!("Remove")),
                 None,
                 Some(sel!(removeAction:)),
                 mtm,
@@ -207,7 +212,7 @@ impl Editor {
             when,
             run,
             pages: ui::pages(mtm, &[]),
-            actions: ui::table(mtm, "Actions"),
+            actions: ui::table(mtm, tr!("Actions")),
             edit,
             remove,
             error,
@@ -241,9 +246,9 @@ impl Editor {
         this.ivars()
             .actions
             .setDraggingSourceOperationMask_forLocal(NSDragOperation::Move, true);
-        let heading = ui::heading(mtm, "Configuration");
-        let name_label = ui::label(mtm, "Name");
-        let when_label = ui::label(mtm, "Run when switching to");
+        let heading = ui::heading(mtm, tr!("Configuration"));
+        let name_label = ui::label(mtm, tr!("Name"));
+        let when_label = ui::label(mtm, tr!("Run when switching to"));
         let metadata = ui::form(
             mtm,
             &[
@@ -251,7 +256,7 @@ impl Editor {
                 [&when_label, &this.ivars().when],
             ],
         );
-        let title = ui::heading(mtm, "Actions");
+        let title = ui::heading(mtm, tr!("Actions"));
         let list = NSScrollView::new(mtm);
         list.setHasVerticalScroller(true);
         list.setDrawsBackground(false);
@@ -259,12 +264,17 @@ impl Editor {
         list.heightAnchor()
             .constraintGreaterThanOrEqualToConstant(180.0)
             .setActive(true);
-        let add = ui::button(mtm, "Add action", &this, sel!(addAction:));
+        let add = ui::button(mtm, tr!("Add action"), &this, sel!(addAction:));
         let controls = ui::stack(mtm, true, &[&add, &this.ivars().edit, &this.ivars().remove]);
-        let save = ui::button(mtm, "Save", &this, sel!(saveProfile:));
+        let save = ui::button(mtm, tr!("Save"), &this, sel!(saveProfile:));
         save.setTintProminence(NSTintProminence::Primary);
-        let cancel = ui::button(mtm, "Cancel", owner, sel!(showProfiles:));
-        let delete = ui::button(mtm, "Delete configuration", &this, sel!(deleteProfile:));
+        let cancel = ui::button(mtm, tr!("Cancel"), owner, sel!(showProfiles:));
+        let delete = ui::button(
+            mtm,
+            tr!("Delete configuration"),
+            &this,
+            sel!(deleteProfile:),
+        );
         delete.setEnabled(this.ivars().key.is_some());
         let buttons = ui::actions(mtm, &[&this.ivars().run, &delete, &cancel, &save]);
         let content = ui::stack(

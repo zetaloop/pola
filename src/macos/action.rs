@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use crate::locale::tr;
+
 use objc2::{
     AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
@@ -105,7 +107,7 @@ define_class!(
                 }),
             };
             let result = action.validate().map_err(|error| error.to_string()).and_then(|()| {
-                self.ivars().owner.load().ok_or("The configuration editor has closed.".to_owned())?
+                self.ivars().owner.load().ok_or(tr!("The configuration editor has closed.").to_owned())?
                     .save_action(self.ivars().index, action)
             });
             match result {
@@ -159,10 +161,10 @@ impl Editor {
             this.ivars().kind.setTarget(Some(&this));
             this.ivars().kind.setAction(Some(sel!(kindChanged:)));
         }
-        let heading = ui::heading(mtm, "Action");
-        let save = ui::button(mtm, "Save", &this, sel!(saveAction:));
+        let heading = ui::heading(mtm, tr!("Action"));
+        let save = ui::button(mtm, tr!("Save"), &this, sel!(saveAction:));
         save.setTintProminence(NSTintProminence::Primary);
-        let cancel = ui::button(mtm, "Cancel", &this, sel!(cancelAction:));
+        let cancel = ui::button(mtm, tr!("Cancel"), &this, sel!(cancelAction:));
         let buttons = ui::actions(mtm, &[&cancel, &save]);
         let content = ui::stack(
             mtm,
@@ -204,8 +206,8 @@ impl Editor {
                 let control = unsafe {
                     NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
                         &NSArray::from_retained_slice(&[
-                            NSString::from_str("Light"),
-                            NSString::from_str("Dark"),
+                            NSString::from_str(tr!("Light")),
+                            NSString::from_str(tr!("Dark")),
                         ]),
                         NSSegmentSwitchTracking::SelectOne,
                         None,
@@ -243,10 +245,10 @@ impl Editor {
                     .enumerate()
                     .map(|(index, value)| self.argument(value, index, &arguments))
                     .collect();
-                let add = ui::button(mtm, "Add argument", self, sel!(addArgument:));
+                let add = ui::button(mtm, tr!("Add argument"), self, sel!(addArgument:));
                 let wait = unsafe {
                     NSButton::checkboxWithTitle_target_action(
-                        &NSString::from_str("Continue after the program exits"),
+                        &NSString::from_str(tr!("Continue after the program exits")),
                         None,
                         None,
                         mtm,
@@ -257,7 +259,7 @@ impl Editor {
                 } else {
                     NSControlStateValueOff
                 });
-                views.push(ui::label(mtm, "Program").into_super().into_super());
+                views.push(ui::label(mtm, tr!("Program")).into_super().into_super());
                 views.push(program.clone().into_super().into_super().into_super());
                 views.push(arguments.clone().into_super());
                 views.push(add.into_super().into_super());
@@ -295,7 +297,7 @@ impl Editor {
             preview.setHidden(image.is_none());
             self.ivars().error.setStringValue(&NSString::from_str(
                 if image.is_none() && !path.value().is_empty() {
-                    "Wallpaper preview unavailable"
+                    tr!("Wallpaper preview unavailable")
                 } else {
                     ""
                 },
@@ -305,14 +307,14 @@ impl Editor {
 
     fn argument(&self, value: &str, index: usize, parent: &NSStackView) -> Argument {
         let field = NSTextField::textFieldWithString(&NSString::from_str(value), self.mtm());
-        field.setPlaceholderString(Some(&NSString::from_str(&format!(
-            "Argument {}",
-            index + 1
+        field.setPlaceholderString(Some(&NSString::from_str(&tr!(
+            "Argument {number}",
+            number = index + 1
         ))));
         if let Some(cell) = field.cell() {
             cell.setUsesSingleLineMode(false);
         }
-        let remove = ui::button(self.mtm(), "Remove", self, sel!(removeArgument:));
+        let remove = ui::button(self.mtm(), tr!("Remove"), self, sel!(removeArgument:));
         remove.setTag(index as isize);
         let view = ui::stack(self.mtm(), true, &[&field, &remove]);
         remove.setContentHuggingPriority_forOrientation(
@@ -342,9 +344,9 @@ impl Editor {
             for (index, row) in rows.iter().enumerate() {
                 row.remove.setTag(index as isize);
                 row.field
-                    .setPlaceholderString(Some(&NSString::from_str(&format!(
-                        "Argument {}",
-                        index + 1
+                    .setPlaceholderString(Some(&NSString::from_str(&tr!(
+                        "Argument {number}",
+                        number = index + 1
                     ))));
             }
             (

@@ -6,6 +6,8 @@ It follows system appearance changes, runs a weekly schedule with multiple trans
 
 Open pola to show the main window. A separate background process handles appearance changes, schedules, and the global shortcut while the window is closed. Appearance editors accept dropped wallpaper images and program files, with individual fields for command arguments. Schedule rules use native time pickers.
 
+The interface supports English and Simplified Chinese, following the system language by default. Settings provides a language selector, while time displays follow the system's regional preferences.
+
 The default shortcut is `Ctrl+Shift+Alt+D`. Record a key combination in Settings to change it. Manual changes take effect immediately while future scheduled transitions continue normally.
 
 ## Build

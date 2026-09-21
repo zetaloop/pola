@@ -1,5 +1,7 @@
 use std::cell::{OnceCell, RefCell};
 
+use crate::locale::tr;
+
 use dispatch2::DispatchQueue;
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
@@ -17,6 +19,7 @@ use crate::{
 mod action;
 pub(crate) mod daemon;
 mod file;
+pub(crate) mod locale;
 mod profile;
 mod profiles;
 mod schedule;
@@ -85,7 +88,7 @@ define_class!(
             _insert: bool,
         ) -> Option<Retained<NSToolbarItem>> {
             let item = match identifier.to_string().as_str() {
-                "settings" => Some(("Settings", "gearshape", sel!(showSettings:))),
+                "settings" => Some((tr!("Settings"), "gearshape", sel!(showSettings:))),
                 _ => None,
             };
             item.map(|(title, symbol, action)| {
@@ -121,9 +124,9 @@ define_class!(
             row: isize,
         ) -> Option<Retained<NSView>> {
             let (name, symbol) = [
-                ("Appearance", "circle.lefthalf.filled"),
-                ("Configurations", "list.bullet"),
-                ("Schedule", "calendar"),
+                (tr!("Appearance"), "circle.lefthalf.filled"),
+                (tr!("Configurations"), "list.bullet"),
+                (tr!("Schedule"), "calendar"),
             ][row as usize];
             Some(ui::cell(self.mtm(), name, Some(&ui::symbol(symbol, name))).into_super())
         }
@@ -188,9 +191,9 @@ impl Delegate {
         let menu = NSMenu::new(mtm);
         let application = NSMenu::new(mtm);
         for (title, action, key) in [
-            ("Show pola", sel!(showWindow:), "0"),
-            ("Settings…", sel!(showSettings:), ","),
-            ("Quit pola", sel!(quit:), "q"),
+            (tr!("Show pola"), sel!(showWindow:), "0"),
+            (tr!("Settings…"), sel!(showSettings:), ","),
+            (tr!("Quit pola"), sel!(quit:), "q"),
         ] {
             let item = unsafe {
                 application.addItemWithTitle_action_keyEquivalent(
@@ -206,13 +209,13 @@ impl Delegate {
         menu.addItem(&root);
 
         let edit = NSMenu::new(mtm);
-        edit.setTitle(ns_string!("Edit"));
+        edit.setTitle(&NSString::from_str(tr!("Edit")));
         for (title, action, key) in [
-            ("Undo", sel!(undo:), "z"),
-            ("Cut", sel!(cut:), "x"),
-            ("Copy", sel!(copy:), "c"),
-            ("Paste", sel!(paste:), "v"),
-            ("Select All", sel!(selectAll:), "a"),
+            (tr!("Undo"), sel!(undo:), "z"),
+            (tr!("Cut"), sel!(cut:), "x"),
+            (tr!("Copy"), sel!(copy:), "c"),
+            (tr!("Paste"), sel!(paste:), "v"),
+            (tr!("Select All"), sel!(selectAll:), "a"),
         ] {
             unsafe {
                 edit.addItemWithTitle_action_keyEquivalent(
@@ -263,14 +266,18 @@ impl Delegate {
     }
 
     fn save_config(&self, config: Config) -> Result<(), String> {
+        let language_changed = self.config().language != config.language;
         self.ivars().client.request(Request::Save(config))?;
+        if language_changed {
+            locale::apply();
+        }
         self.update_window();
         Ok(())
     }
 
     fn select(&self, mode: Mode) {
         if let Err(error) = self.ivars().client.request(Request::Select(mode)) {
-            show_error("Could not change appearance", &error);
+            show_error(tr!("Could not change appearance"), &error);
         }
         self.update_window();
     }
@@ -282,7 +289,7 @@ impl Delegate {
                 .profiles
                 .iter_mut()
                 .find(|profile| profile.name == name)
-                .ok_or("This configuration has been removed.")?;
+                .ok_or(tr!("This configuration has been removed."))?;
             if existing == &profile {
                 return Ok(());
             }
@@ -339,8 +346,6 @@ pub(crate) fn show_error(title: &str, message: &str) {
 
 pub fn run() -> Result<(), String> {
     let mtm = objc2_foundation::MainThreadMarker::new().expect("pola must run on the main thread");
-    let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     let client = Client::connect(|error| {
         DispatchQueue::main().exec_async(move || {
             if let Some(delegate) = DELEGATE.with(|slot| slot.borrow().clone()) {
@@ -351,6 +356,9 @@ pub fn run() -> Result<(), String> {
             }
         });
     })?;
+    locale::apply();
+    let app = NSApplication::sharedApplication(mtm);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     let delegate = Delegate::new(mtm, client);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));

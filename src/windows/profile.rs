@@ -1,5 +1,7 @@
 use std::{collections::HashMap, rc::Rc};
 
+use crate::locale::tr;
+
 use windows_reactor::*;
 
 use super::{AppState, action};
@@ -146,7 +148,7 @@ impl Component for Editor {
                         .iter_mut()
                         .find(|profile| &profile.name == name)
                     else {
-                        self.error = "This configuration has been removed.".into();
+                        self.error = tr!("This configuration has been removed.").into();
                         return;
                     };
                     *profile = self.draft.clone();
@@ -199,21 +201,21 @@ impl Component for Editor {
                                 Button::new()
                                     .grid_column(1)
                                     .on_click(context.message(Message::Remove(key)))
-                                    .content("Remove"),
+                                    .content(tr!("Remove")),
                             )),
                     ),
                 )
             });
         let content = StackPanel::new().spacing(20.0).max_width(800.0).children((
             TextBlock::new()
-                .text(self.name.as_deref().unwrap_or("New configuration"))
+                .text(self.name.as_deref().unwrap_or(tr!("New configuration")))
                 .font_size(28.0)
                 .font_weight(FontWeight::SEMI_BOLD),
             TextBox::new()
-                .header("Name")
+                .header(tr!("Name"))
                 .text(self.draft.name.clone())
                 .on_text_changed(context.callback(Message::Name)),
-            TextBlock::new().text("Run when switching to"),
+            TextBlock::new().text(tr!("Run when switching to")),
             StackPanel::new()
                 .orientation(Orientation::Horizontal)
                 .spacing(16.0)
@@ -225,11 +227,11 @@ impl Component for Editor {
                             .on_is_checked_changed(
                                 context.callback(move |enabled| Message::When(mode, enabled)),
                             )
-                            .content(mode.to_string()),
+                            .content(mode.label()),
                     )
                 })),
             TextBlock::new()
-                .text("Actions")
+                .text(tr!("Actions"))
                 .font_size(20.0)
                 .font_weight(FontWeight::SEMI_BOLD),
             ListView::new()
@@ -241,7 +243,7 @@ impl Component for Editor {
                 .items(actions),
             Button::new()
                 .on_click(context.message(Message::Add))
-                .content("Add action"),
+                .content(tr!("Add action")),
         ));
         Grid::new()
             .rows([GridLength::STAR, GridLength::Auto])
@@ -267,14 +269,14 @@ impl Component for Editor {
                                     .style(ButtonStyle::Accent)
                                     .is_enabled(self.draft != self.saved)
                                     .on_click(context.message(Message::Save))
-                                    .content("Save"),
+                                    .content(tr!("Save")),
                                 Button::new()
                                     .on_click(context.message(Message::Cancel))
-                                    .content("Cancel"),
+                                    .content(tr!("Cancel")),
                                 Button::new()
                                     .is_enabled(self.name.is_some())
                                     .on_click(context.message(Message::Delete))
-                                    .content("Delete configuration"),
+                                    .content(tr!("Delete configuration")),
                             )),
                     )),
             ))

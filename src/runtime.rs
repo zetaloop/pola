@@ -14,6 +14,7 @@ use crate::windows::{daemon, system};
 use crate::{
     config::{Action, Config, Profile},
     ipc::{Incoming, Request, Response, State},
+    locale::{self, tr},
     mode::Mode,
     schedule::Event,
     shortcut::Shortcut,
@@ -32,6 +33,7 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(config: Config) -> Self {
+        locale::set(config.language);
         Self {
             config: RefCell::new(config),
             shortcut: RefCell::new(Shortcut::default()),
@@ -172,11 +174,16 @@ impl Runtime {
                 .borrow_mut()
                 .register(&self.config.borrow().shortcut)
             {
-                return Err(format!("{error}\nShortcut: {restore}"));
+                return Err(tr!(
+                    "{error}\nShortcut: {restore}",
+                    error = error,
+                    restore = restore
+                ));
             }
             return Err(error.to_string());
         }
         self.recording.set(None);
+        locale::set(config.language);
         *self.config.borrow_mut() = config;
         Ok(())
     }
@@ -225,7 +232,7 @@ impl Runtime {
             .borrow()
             .profile(name)
             .cloned()
-            .ok_or_else(|| format!("Configuration {name:?} was not found."))?;
+            .ok_or_else(|| tr!("Configuration {name:?} was not found.", name = name))?;
         self.execute(vec![profile], reply)
     }
 
@@ -235,7 +242,7 @@ impl Runtime {
         reply: Option<Sender<Response>>,
     ) -> Result<(), String> {
         if self.busy.replace(true) {
-            return Err("A configuration is already running.".into());
+            return Err(tr!("A configuration is already running.").into());
         }
         if let Err(error) = thread::Builder::new().spawn(move || {
             let mut errors = Vec::new();

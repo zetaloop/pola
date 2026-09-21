@@ -1,4 +1,6 @@
 use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
+
+use crate::locale::tr;
 use objc2_app_kit::*;
 use objc2_foundation::{MainThreadMarker, NSArray, NSIndexSet, NSSize, NSString, ns_string};
 
@@ -44,10 +46,13 @@ impl Window {
         sidebar.setView(&sidebar_scroll);
         let sidebar = NSSplitViewItem::sidebarWithViewController(&sidebar);
 
-        let title = ui::heading(mtm, "Appearance");
+        let title = ui::heading(mtm, tr!("Appearance"));
         let mode = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &NSArray::from_slice(&[ns_string!("Light"), ns_string!("Dark")]),
+                &NSArray::from_slice(&[
+                    &*NSString::from_str(tr!("Light")),
+                    &*NSString::from_str(tr!("Dark")),
+                ]),
                 NSSegmentSwitchTracking::SelectOne,
                 Some(delegate),
                 Some(sel!(selectMode:)),
@@ -111,13 +116,7 @@ impl Window {
             .setSelectedSegment(isize::from(mode == Mode::Dark));
         self.next.setStringValue(&NSString::from_str(
             &next
-                .map(|event| {
-                    format!(
-                        "Switch to {} at {}",
-                        event.mode,
-                        event.at.strftime("%a %H:%M")
-                    )
-                })
+                .map(|event| crate::locale::next(event).unwrap_or_else(|error| error))
                 .unwrap_or_default(),
         ));
         self.profiles.update();

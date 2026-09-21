@@ -19,11 +19,13 @@ use windows_window::Window;
 use crate::{
     config::Config,
     ipc::{Client, Request},
+    locale::tr,
     mode::Mode,
 };
 
 mod action;
 pub(crate) mod daemon;
+pub(crate) mod locale;
 mod profile;
 mod schedule;
 mod settings;
@@ -73,6 +75,7 @@ impl AppState {
     }
 
     fn start(self: &Rc<Self>) -> windows_window::Result<()> {
+        locale::apply().map_err(std::io::Error::other)?;
         let state = Rc::downgrade(self);
         let window = Window::new("io.github.zetaloop.pola.frontend")
             .visible(false)
@@ -116,7 +119,7 @@ impl AppState {
                 )))
         {
             *self.window.borrow_mut() = OpenWindow::Closed;
-            show_error("Could not open window", &error.to_string());
+            show_error(tr!("Could not open window"), &error.to_string());
             self.exit();
         }
     }
@@ -144,7 +147,7 @@ impl AppState {
     fn exit(&self) {
         *self.window.borrow_mut() = OpenWindow::Closed;
         if let Err(error) = self.app.exit() {
-            show_error("Could not exit pola", &error.to_string());
+            show_error(tr!("Could not exit pola"), &error.to_string());
         }
     }
 
@@ -157,6 +160,7 @@ impl AppState {
     }
 
     pub(crate) fn save_config(&self, config: Config, launch: bool) -> Result<(), String> {
+        let language_changed = self.config().language != config.language;
         let old_launch = self.launch_at_login();
         if old_launch != launch {
             self.client.request(Request::Launch(launch))?;
@@ -165,9 +169,16 @@ impl AppState {
             if old_launch != launch
                 && let Err(restore) = self.client.request(Request::Launch(old_launch))
             {
-                return Err(format!("{error}\nLaunch at login: {restore}"));
+                return Err(tr!(
+                    "{error}\nLaunch at login: {restore}",
+                    error = error,
+                    restore = restore
+                ));
             }
             return Err(error);
+        }
+        if language_changed {
+            locale::apply()?;
         }
         self.notify_window();
         Ok(())
@@ -179,7 +190,7 @@ impl AppState {
 
     fn select(&self, mode: Mode) {
         if let Err(error) = self.client.request(Request::Select(mode)) {
-            show_error("Could not change appearance", &error);
+            show_error(tr!("Could not change appearance"), &error);
         }
         self.notify_window();
     }

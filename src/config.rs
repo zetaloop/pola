@@ -10,13 +10,19 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{mode::Mode, schedule::Schedule};
+use crate::{
+    locale::{self, Locale, tr},
+    mode::Mode,
+    schedule::Schedule,
+};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Locale>,
     pub shortcut: String,
     pub schedule: Schedule,
     pub profiles: Vec<Profile>,
@@ -25,6 +31,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: None,
             shortcut: "ctrl+shift+alt+d".into(),
             schedule: Schedule::default(),
             profiles: Vec::new(),
@@ -38,6 +45,7 @@ impl Config {
         match fs::read_to_string(path) {
             Ok(text) => {
                 let config: Self = toml::from_str(&text)?;
+                locale::set(config.language);
                 config.validate()?;
                 Ok(config)
             }
@@ -66,12 +74,14 @@ impl Config {
         let mut names = HashSet::new();
         for profile in &self.profiles {
             if profile.name.trim().is_empty() {
-                return Err("Enter a configuration name.".into());
+                return Err(tr!("Enter a configuration name.").into());
             }
             if !names.insert(&profile.name) {
-                return Err(
-                    format!("A configuration named {:?} already exists.", profile.name).into(),
-                );
+                return Err(tr!(
+                    "A configuration named {name:?} already exists.",
+                    name = profile.name
+                )
+                .into());
             }
             for action in &profile.actions {
                 action.validate()?;
@@ -124,36 +134,36 @@ impl Action {
 
     pub fn title(&self) -> &'static str {
         match self {
-            Self::Color { .. } => "System appearance",
-            Self::Wallpaper { .. } => "Wallpaper",
-            Self::Command(_) => "Command",
+            Self::Color { .. } => tr!("System appearance"),
+            Self::Wallpaper { .. } => tr!("Wallpaper"),
+            Self::Command(_) => tr!("Command"),
             #[cfg(target_os = "windows")]
-            Self::Theme { .. } => "Windows theme",
+            Self::Theme { .. } => tr!("Windows theme"),
         }
     }
 
     pub fn summary(&self) -> String {
         let target = match self {
-            Self::Color { mode } => mode.to_string(),
+            Self::Color { mode } => mode.label().into(),
             Self::Wallpaper { path } => path.display().to_string(),
             Self::Command(command) => command.program.clone(),
             #[cfg(target_os = "windows")]
             Self::Theme { path } => path.display().to_string(),
         };
-        format!("{}: {target}", self.title())
+        tr!("{title}: {target}", title = self.title(), target = target)
     }
 
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Command(command) if command.program.is_empty() => {
-                Err("Enter a program to run.".into())
+                Err(tr!("Enter a program to run.").into())
             }
             Self::Wallpaper { path } if path.as_os_str().is_empty() => {
-                Err("Enter a wallpaper path.".into())
+                Err(tr!("Enter a wallpaper path.").into())
             }
             #[cfg(target_os = "windows")]
             Self::Theme { path } if path.as_os_str().is_empty() => {
-                Err("Enter a theme path.".into())
+                Err(tr!("Enter a theme path.").into())
             }
             _ => Ok(()),
         }
@@ -218,11 +228,12 @@ impl Command {
 
 pub fn path() -> io::Result<PathBuf> {
     #[cfg(target_os = "windows")]
-    let base =
-        env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("LOCALAPPDATA is not set"))?;
+    let base = env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| io::Error::other(tr!("{variable} is not set", variable = "LOCALAPPDATA")))?;
 
     #[cfg(target_os = "macos")]
-    let base = env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?;
+    let base = env::var_os("HOME")
+        .ok_or_else(|| io::Error::other(tr!("{variable} is not set", variable = "HOME")))?;
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     compile_error!("pola supports Windows and macOS");

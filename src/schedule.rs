@@ -110,6 +110,18 @@ pub enum Weekday {
     Sun,
 }
 
+impl Weekday {
+    pub const ALL: [Self; 7] = [
+        Self::Mon,
+        Self::Tue,
+        Self::Wed,
+        Self::Thu,
+        Self::Fri,
+        Self::Sat,
+        Self::Sun,
+    ];
+}
+
 impl From<JiffWeekday> for Weekday {
     fn from(day: JiffWeekday) -> Self {
         match day {

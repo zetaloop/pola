@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use crate::locale::tr;
+
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
@@ -59,7 +61,7 @@ define_class!(
 
 impl List {
     pub fn new(mtm: MainThreadMarker, owner: &Delegate) -> Retained<Self> {
-        let table = ui::table(mtm, "Configurations");
+        let table = ui::table(mtm, tr!("Configurations"));
         let pages = NSTabViewController::new(mtm);
         pages.setTabStyle(NSTabViewControllerTabStyle::Unspecified);
         pages
@@ -84,7 +86,7 @@ impl List {
             this.ivars().table.setTarget(Some(&this));
             this.ivars().table.setAction(Some(sel!(editProfile:)));
         }
-        let title = ui::heading(mtm, "Configurations");
+        let title = ui::heading(mtm, tr!("Configurations"));
         let scroll = NSScrollView::new(mtm);
         scroll.setHasVerticalScroller(true);
         scroll.setDrawsBackground(false);
@@ -93,7 +95,7 @@ impl List {
             .heightAnchor()
             .constraintGreaterThanOrEqualToConstant(180.0)
             .setActive(true);
-        let add = ui::button(mtm, "New configuration", &this, sel!(addProfile:));
+        let add = ui::button(mtm, tr!("New configuration"), &this, sel!(addProfile:));
         let content = ui::stack(mtm, false, &[&title, &scroll, &add]);
         scroll
             .widthAnchor()

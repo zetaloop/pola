@@ -5,7 +5,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_reactor::*;
 
 use super::AppState;
-use crate::config::Config;
+use crate::{
+    config::Config,
+    locale::{Locale, tr},
+};
 
 #[derive(Clone)]
 pub(crate) struct SettingsInput {
@@ -29,6 +32,7 @@ pub(crate) struct Settings {
 
 #[derive(Clone)]
 pub(crate) enum Message {
+    Language(Option<usize>),
     Launch(bool),
     Record,
     Pressed(KeyEventInfo),
@@ -58,6 +62,18 @@ impl Component for Settings {
             self.error.clear();
         }
         match message {
+            Message::Language(Some(index)) => {
+                let mut config = self.state.config();
+                config.language = match index {
+                    1 => Some(Locale::English),
+                    2 => Some(Locale::Chinese),
+                    _ => None,
+                };
+                if let Err(error) = self.state.save_config(config, self.state.launch_at_login()) {
+                    self.error = error;
+                }
+            }
+            Message::Language(None) => {}
             Message::Launch(value) => {
                 if let Err(error) = self.state.save_config(self.state.config(), value) {
                     self.error = error;
@@ -107,7 +123,7 @@ impl Component for Settings {
                 }
             }
             Message::FocusFailed => {
-                self.error = "Could not focus the shortcut recorder.".into();
+                self.error = tr!("Could not focus the shortcut recorder.").into();
                 self.finish();
             }
             Message::ClearError => {}
@@ -136,7 +152,7 @@ impl Component for Settings {
                     .element_ref(&self.recorder)
                     .is_tab_stop(true)
                     .focus_on_pointer_release(true)
-                    .automation_name("Record global shortcut")
+                    .automation_name(tr!("Record global shortcut"))
                     .background(ThemeBrush::CardBackground)
                     .border_brush(ThemeBrush::CardStroke)
                     .border_thickness(1.0)
@@ -163,17 +179,20 @@ impl Component for Settings {
                     )
                     .on_lost_focus(context.callback(|_| Message::Cancel))
                     .content(
-                        TextBlock::new()
-                            .text(self.pending.as_deref().unwrap_or("Press a key combination")),
+                        TextBlock::new().text(
+                            self.pending
+                                .as_deref()
+                                .unwrap_or(tr!("Press a key combination")),
+                        ),
                     ),
                 Button::new()
                     .on_click(context.message(Message::Cancel))
-                    .content("Cancel recording"),
+                    .content(tr!("Cancel recording")),
             ))
         } else {
             StackPanel::new().spacing(12.0).children((
                 TextBlock::new().text(if input.config.shortcut.is_empty() {
-                    "None"
+                    tr!("None")
                 } else {
                     &input.config.shortcut
                 }),
@@ -183,11 +202,11 @@ impl Component for Settings {
                     .children((
                         Button::new()
                             .on_click(context.message(Message::Record))
-                            .content("Record shortcut"),
+                            .content(tr!("Record shortcut")),
                         Button::new()
                             .is_enabled(!input.config.shortcut.is_empty())
                             .on_click(context.message(Message::Remove))
-                            .content("Remove shortcut"),
+                            .content(tr!("Remove shortcut")),
                     )),
             ))
         };
@@ -197,20 +216,32 @@ impl Component for Settings {
                 Border::new().padding(28.0).content(
                     StackPanel::new().spacing(24.0).max_width(800.0).children((
                         TextBlock::new()
-                            .text("Settings")
+                            .text(tr!("Settings"))
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
+                        ComboBox::new()
+                            .header(tr!("Language"))
+                            .items_source([tr!("System default"), "English", "简体中文"])
+                            .selected_index(match input.config.language {
+                                None => 0,
+                                Some(Locale::English) => 1,
+                                Some(Locale::Chinese) => 2,
+                            })
+                            .is_enabled(!self.recording)
+                            .on_selection_changed(context.callback(Message::Language)),
                         ToggleSwitch::new()
-                            .header("Launch at login")
+                            .header(tr!("Launch at login"))
                             .is_on(self.state.launch_at_login())
                             .is_enabled(!self.recording)
                             .on_toggled(context.callback(Message::Launch)),
                         TextBlock::new()
-                            .text("Global shortcut")
+                            .text(tr!("Global shortcut"))
                             .font_size(20.0)
                             .font_weight(FontWeight::SEMI_BOLD),
                         TextBlock::new()
-                            .text("Switch between light and dark appearance from any application.")
+                            .text(tr!(
+                                "Switch between light and dark appearance from any application."
+                            ))
                             .text_wrapping(TextWrapping::Wrap),
                         shortcut,
                         InfoBar::new()
@@ -236,8 +267,10 @@ impl Settings {
                     if !self.error.is_empty() {
                         self.error.push('\n');
                     }
-                    self.error
-                        .push_str(&format!("Could not restore the shortcut: {error}"));
+                    self.error.push_str(&tr!(
+                        "Could not restore the shortcut: {error}",
+                        error = error
+                    ));
                 }
             }
         }
@@ -249,7 +282,7 @@ impl Drop for Settings {
         if self.recording
             && let Err(error) = self.state.register_hotkey(&self.state.config().shortcut)
         {
-            super::show_error("Could not restore shortcut", &error.to_string());
+            super::show_error(tr!("Could not restore shortcut"), &error.to_string());
         }
     }
 }
@@ -312,7 +345,7 @@ fn shortcut(info: KeyEventInfo) -> Result<Option<String>, String> {
             VK_MEDIA_STOP => "MediaStop",
             VK_MEDIA_NEXT_TRACK => "MediaTrackNext",
             VK_MEDIA_PREV_TRACK => "MediaTrackPrevious",
-            _ => return Err("This key cannot be used as a global shortcut.".into()),
+            _ => return Err(tr!("This key cannot be used as a global shortcut.").into()),
         }
         .into(),
     };

@@ -1,5 +1,7 @@
 use std::cell::RefCell;
 
+use crate::locale::tr;
+
 use jiff::civil::Time;
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
@@ -17,17 +19,6 @@ use crate::{
     mode::Mode,
     schedule::{Rule, Weekday},
 };
-
-const DAYS: [Weekday; 7] = [
-    Weekday::Mon,
-    Weekday::Tue,
-    Weekday::Wed,
-    Weekday::Thu,
-    Weekday::Fri,
-    Weekday::Sat,
-    Weekday::Sun,
-];
-const NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 struct Form {
     window: Retained<NSWindow>,
@@ -76,14 +67,9 @@ define_class!(
                 let config = owner.config();
                 let rule = &config.schedule.rules[row as usize];
                 let text = match column.map(|c| c.identifier().to_string()).as_deref() {
-                    Some("days") => DAYS
-                        .iter()
-                        .zip(NAMES)
-                        .filter_map(|(day, name)| rule.days.contains(day).then_some(name))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    Some("time") => rule.time.strftime("%H:%M").to_string(),
-                    _ => rule.mode.to_string(),
+                    Some("days") => crate::locale::days(&rule.days).unwrap_or_else(|error| error),
+                    Some("time") => super::locale::time(rule.time).unwrap_or_else(|error| error),
+                    _ => rule.mode.label().into(),
                 };
                 ui::cell(self.mtm(), &text, None).into_super()
             })
@@ -136,14 +122,14 @@ define_class!(
                     return;
                 };
                 form.window.makeFirstResponder(None);
-                let days: Vec<_> = DAYS
+                let days: Vec<_> = Weekday::ALL
                     .into_iter()
                     .enumerate()
                     .filter_map(|(i, day)| form.days.isSelectedForSegment(i as isize).then_some(day))
                     .collect();
                 if days.is_empty() {
                     form.error
-                        .setStringValue(&NSString::from_str("Choose at least one day."));
+                        .setStringValue(&NSString::from_str(tr!("Choose at least one day.")));
                     return;
                 }
                 let seconds = form
@@ -200,9 +186,9 @@ impl Editor {
         table.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         table.setStyle(NSTableViewStyle::Inset);
         for (name, title, width) in [
-            ("days", "Days", 250.0),
-            ("time", "Time", 100.0),
-            ("mode", "Appearance", 110.0),
+            ("days", tr!("Days"), 250.0),
+            ("time", tr!("Time"), 100.0),
+            ("mode", tr!("Appearance"), 110.0),
         ] {
             let column = NSTableColumn::initWithIdentifier(
                 NSTableColumn::alloc(mtm),
@@ -236,7 +222,7 @@ impl Editor {
             this.ivars().enabled.setTarget(Some(&this));
             this.ivars().enabled.setAction(Some(sel!(enabledChanged:)));
         }
-        let heading = ui::heading(mtm, "Schedule");
+        let heading = ui::heading(mtm, tr!("Schedule"));
         let header = ui::stack(mtm, true, &[&heading, &this.ivars().enabled]);
         header.setDistribution(NSStackViewDistribution::EqualSpacing);
         let scroll = NSScrollView::new(mtm);
@@ -247,9 +233,9 @@ impl Editor {
             .heightAnchor()
             .constraintGreaterThanOrEqualToConstant(230.0)
             .setActive(true);
-        let add = ui::button(mtm, "Add arrangement", &this, sel!(addRule:));
-        let edit = ui::button(mtm, "Edit…", &this, sel!(editRule:));
-        let remove = ui::button(mtm, "Remove", &this, sel!(removeRule:));
+        let add = ui::button(mtm, tr!("Add arrangement"), &this, sel!(addRule:));
+        let edit = ui::button(mtm, tr!("Edit…"), &this, sel!(editRule:));
+        let remove = ui::button(mtm, tr!("Remove"), &this, sel!(removeRule:));
         let actions = ui::stack(mtm, true, &[&add, &edit, &remove]);
         let content = ui::stack(
             mtm,
@@ -286,19 +272,31 @@ impl Editor {
         let Some(owner) = self.ivars().owner.load() else {
             return;
         };
+        let names = match super::locale::weekdays() {
+            Ok(names) => names,
+            Err(error) => {
+                self.error(&error);
+                return;
+            }
+        };
         let config = owner.config();
         let rule = index
             .map(|index| config.schedule.rules[index].clone())
             .unwrap_or_else(|| Rule {
-                days: DAYS[..5].to_vec(),
+                days: Weekday::ALL[..5].to_vec(),
                 time: Time::new(18, 0, 0, 0).unwrap(),
                 mode: Mode::Dark,
             });
         let mtm = self.mtm();
-        let window = ui::window(mtm, "Arrangement", 560.0, 300.0);
+        let window = ui::window(mtm, tr!("Arrangement"), 560.0, 300.0);
         let days = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &NSArray::from_retained_slice(&NAMES.map(NSString::from_str)),
+                &NSArray::from_retained_slice(
+                    &names
+                        .iter()
+                        .map(|name| NSString::from_str(name))
+                        .collect::<Vec<_>>(),
+                ),
                 NSSegmentSwitchTracking::SelectAny,
                 None,
                 None,
@@ -306,7 +304,7 @@ impl Editor {
             )
         };
         days.setControlSize(NSControlSize::Large);
-        for (i, day) in DAYS.into_iter().enumerate() {
+        for (i, day) in Weekday::ALL.into_iter().enumerate() {
             days.setSelected_forSegment(rule.days.contains(&day), i as isize);
         }
         let time = NSDatePicker::new(mtm);
@@ -320,8 +318,8 @@ impl Editor {
         let mode = unsafe {
             NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
                 &NSArray::from_retained_slice(&[
-                    NSString::from_str("Light"),
-                    NSString::from_str("Dark"),
+                    NSString::from_str(tr!("Light")),
+                    NSString::from_str(tr!("Dark")),
                 ]),
                 NSSegmentSwitchTracking::SelectOne,
                 None,
@@ -331,9 +329,9 @@ impl Editor {
         };
         mode.setSelectedSegment(isize::from(rule.mode == Mode::Dark));
         mode.setControlSize(NSControlSize::Large);
-        let days_label = ui::label(mtm, "Days");
-        let time_label = ui::label(mtm, "Time");
-        let mode_label = ui::label(mtm, "Appearance");
+        let days_label = ui::label(mtm, tr!("Days"));
+        let time_label = ui::label(mtm, tr!("Time"));
+        let mode_label = ui::label(mtm, tr!("Appearance"));
         let form = ui::form(
             mtm,
             &[
@@ -344,10 +342,10 @@ impl Editor {
         );
         form.columnAtIndex(1)
             .setXPlacement(NSGridCellPlacement::Leading);
-        let save = ui::button(mtm, "Save", self, sel!(saveRule:));
+        let save = ui::button(mtm, tr!("Save"), self, sel!(saveRule:));
         save.setControlSize(NSControlSize::Large);
         save.setKeyEquivalent(&NSString::from_str("\r"));
-        let cancel = ui::button(mtm, "Cancel", self, sel!(cancelRule:));
+        let cancel = ui::button(mtm, tr!("Cancel"), self, sel!(cancelRule:));
         cancel.setControlSize(NSControlSize::Large);
         cancel.setKeyEquivalent(&NSString::from_str("\u{1b}"));
         let actions = ui::actions(mtm, &[&cancel, &save]);

@@ -1,5 +1,7 @@
 use std::cell::OnceCell;
 
+use crate::locale::{Locale, tr};
+
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
@@ -7,10 +9,12 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOn, NSGridCellPlacement, NSSwitch, NSTextField, NSWindow,
-    NSWindowDelegate,
+    NSColor, NSControlStateValueOn, NSGridCellPlacement, NSPopUpButton, NSSwitch, NSTextField,
+    NSWindow, NSWindowDelegate,
 };
-use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSRect, NSString,
+};
 
 use super::{Delegate, shortcut::Recorder, ui};
 
@@ -19,6 +23,7 @@ pub struct Ivars {
     window: Retained<NSWindow>,
     launch: Retained<NSSwitch>,
     apply: Retained<NSSwitch>,
+    language: Retained<NSPopUpButton>,
     recorder: OnceCell<Retained<Recorder>>,
     error: Retained<NSTextField>,
 }
@@ -38,6 +43,21 @@ define_class!(
     }
 
     impl Settings {
+        #[unsafe(method(languageChanged:))]
+        fn language_changed(&self, sender: &NSPopUpButton) {
+            if let Some(owner) = self.ivars().owner.load() {
+                let mut config = owner.config();
+                config.language = match sender.indexOfSelectedItem() {
+                    1 => Some(Locale::English), 2 => Some(Locale::Chinese), _ => None,
+                };
+                match owner.save_config(config) {
+                    Ok(()) => self.error(""),
+                    Err(error) => self.error(&error),
+                }
+                self.update();
+            }
+        }
+
         #[unsafe(method(launchChanged:))]
         fn launch_changed(&self, sender: &NSSwitch) {
             if let Some(owner) = self.ivars().owner.load() {
@@ -72,7 +92,14 @@ define_class!(
 
 impl Settings {
     pub fn new(mtm: MainThreadMarker, owner: &Delegate) -> Retained<Self> {
-        let window = ui::window(mtm, "Settings", 480.0, 260.0);
+        let window = ui::window(mtm, tr!("Settings"), 480.0, 320.0);
+        let language =
+            NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
+        language.addItemsWithTitles(&NSArray::from_retained_slice(&[
+            NSString::from_str(tr!("System default")),
+            NSString::from_str("English"),
+            NSString::from_str("简体中文"),
+        ]));
         let launch = NSSwitch::new(mtm);
         let apply = NSSwitch::new(mtm);
         let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
@@ -82,6 +109,7 @@ impl Settings {
             window,
             launch,
             apply,
+            language,
             recorder: OnceCell::new(),
             error,
         });
@@ -98,18 +126,26 @@ impl Settings {
                 control.setAction(Some(action));
             }
         }
-        let launch_label = ui::label(mtm, "Launch at login");
-        let apply_label = ui::label(mtm, "Apply schedule on launch");
+        unsafe {
+            this.ivars().language.setTarget(Some(&this));
+            this.ivars()
+                .language
+                .setAction(Some(sel!(languageChanged:)));
+        }
+        let language_label = ui::label(mtm, tr!("Language"));
+        let launch_label = ui::label(mtm, tr!("Launch at login"));
+        let apply_label = ui::label(mtm, tr!("Apply schedule on launch"));
         let recorder = this
             .ivars()
             .recorder
             .get_or_init(|| Recorder::new(mtm, &this));
-        let clear = ui::button(mtm, "Clear", &this, sel!(clearShortcut:));
-        let shortcut_label = ui::label(mtm, "Global shortcut");
+        let clear = ui::button(mtm, tr!("Clear"), &this, sel!(clearShortcut:));
+        let shortcut_label = ui::label(mtm, tr!("Global shortcut"));
         let controls = ui::stack(mtm, true, &[recorder, &clear]);
         let form = ui::form(
             mtm,
             &[
+                [&language_label, &this.ivars().language],
                 [&launch_label, &this.ivars().launch],
                 [&apply_label, &this.ivars().apply],
                 [&shortcut_label, &controls],
@@ -139,6 +175,13 @@ impl Settings {
     pub fn update(&self) {
         if let Some(owner) = self.ivars().owner.load() {
             let config = owner.config();
+            self.ivars()
+                .language
+                .selectItemAtIndex(match config.language {
+                    None => 0,
+                    Some(Locale::English) => 1,
+                    Some(Locale::Chinese) => 2,
+                });
             self.ivars()
                 .launch
                 .setState(isize::from(owner.launch_at_login()));

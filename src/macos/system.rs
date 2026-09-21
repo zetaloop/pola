@@ -13,7 +13,7 @@ use objc2_foundation::{
     NSPropertyListMutabilityOptions, NSPropertyListSerialization, NSString, NSURL, ns_string,
 };
 
-use crate::mode::Mode;
+use crate::{locale::tr, mode::Mode};
 
 pub fn mode() -> Result<Mode, String> {
     let mtm = MainThreadMarker::new().expect("appearance reads require the main thread");
@@ -42,7 +42,7 @@ pub fn set_mode(mode: Mode) -> Result<(), String> {
         }
     });
     let script = NSAppleScript::initWithSource(NSAppleScript::alloc(), &source)
-        .ok_or("Could not create appearance script")?;
+        .ok_or(tr!("Could not create appearance script"))?;
     let mut error = None;
     unsafe {
         script.executeAndReturnError(Some(&mut error));
@@ -54,7 +54,8 @@ pub fn set_mode(mode: Mode) -> Result<(), String> {
 }
 
 fn agent_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
+    let home =
+        std::env::var_os("HOME").ok_or_else(|| tr!("{variable} is not set", variable = "HOME"))?;
     Ok(PathBuf::from(home).join("Library/LaunchAgents/io.github.zetaloop.pola.plist"))
 }
 
@@ -74,13 +75,13 @@ fn read_agent(path: &Path) -> Result<Option<Retained<NSDictionary>>, String> {
     .map_err(|error| error.to_string())?;
     let agent = plist
         .downcast::<NSDictionary>()
-        .map_err(|_| "Login item must contain a property list dictionary")?;
+        .map_err(|_| tr!("Login item must contain a property list dictionary"))?;
     if !agent
         .objectForKey(ns_string!("Label"))
         .and_then(|value| value.downcast::<NSString>().ok())
         .is_some_and(|value| &*value == ns_string!("io.github.zetaloop.pola"))
     {
-        return Err("Login item path is occupied by another service".into());
+        return Err(tr!("Login item path is occupied by another service").into());
     }
     Ok(Some(agent))
 }

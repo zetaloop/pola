@@ -1,5 +1,7 @@
 use std::{cell::Cell, str::FromStr};
 
+use crate::locale::tr;
+
 use global_hotkey::hotkey::HotKey;
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
@@ -31,7 +33,7 @@ define_class!(
                 && owner.suspend_shortcut()
             {
                 self.ivars().recording.set(true);
-                self.setTitle(&NSString::from_str("Press a shortcut…"));
+                self.setTitle(&NSString::from_str(tr!("Press a shortcut…")));
                 self.window().unwrap().makeFirstResponder(Some(self));
             }
         }
@@ -90,7 +92,7 @@ impl Recorder {
             return;
         }
         let title = if value.is_empty() {
-            "Record shortcut…".into()
+            tr!("Record shortcut…").into()
         } else {
             value
                 .replace("ctrl+", "⌃")

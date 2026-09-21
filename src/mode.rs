@@ -9,6 +9,14 @@ pub enum Mode {
 }
 
 impl Mode {
+    pub fn label(self) -> &'static str {
+        use crate::locale::tr;
+        match self {
+            Self::Light => tr!("Light"),
+            Self::Dark => tr!("Dark"),
+        }
+    }
+
     pub const fn toggle(self) -> Self {
         match self {
             Self::Light => Self::Dark,

@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use crate::locale::tr;
+
 use windows_reactor::*;
 
 use super::{
@@ -80,7 +82,7 @@ impl Component for Main {
         match message {
             Message::Runtime(Event::Activate) => {
                 if !context.window().request_activate() {
-                    self.status = "Could not activate the window.".into();
+                    self.status = tr!("Could not activate the window.").into();
                 }
                 self.mode = self.state.system_mode();
             }
@@ -99,7 +101,7 @@ impl Component for Main {
                     Some(name) => match self.state.config().profile(name).cloned() {
                         Some(profile) => profile,
                         None => {
-                            self.status = "This configuration has been removed.".into();
+                            self.status = tr!("This configuration has been removed.").into();
                             return;
                         }
                     },
@@ -184,7 +186,7 @@ impl Component for Main {
                         .tag("appearance")
                         .is_selected(appearance_selected)
                         .icon(SymbolIcon::new().symbol(Symbol::Pictures))
-                        .content("Appearance"),
+                        .content(tr!("Appearance")),
                 ),
                 (
                     "profiles",
@@ -192,7 +194,7 @@ impl Component for Main {
                         .tag("profiles")
                         .is_selected(matches!(self.page, Page::Profiles | Page::Profile { .. }))
                         .icon(SymbolIcon::new().symbol(Symbol::List))
-                        .content("Configurations"),
+                        .content(tr!("Configurations")),
                 ),
                 (
                     "schedule",
@@ -200,7 +202,7 @@ impl Component for Main {
                         .tag("schedule")
                         .is_selected(self.page == Page::Schedule)
                         .icon(SymbolIcon::new().symbol(Symbol::Calendar))
-                        .content("Schedule"),
+                        .content(tr!("Schedule")),
                 ),
             ])
             .footer_menu_items([(
@@ -209,13 +211,13 @@ impl Component for Main {
                     .tag("settings")
                     .is_selected(self.page == Page::Settings)
                     .icon(SymbolIcon::new().symbol(Symbol::Setting))
-                    .content("Settings"),
+                    .content(tr!("Settings")),
             )])
             .pane_footer(
                 Button::new()
                     .margin(Thickness::uniform(12.0))
                     .on_click(context.message(Message::Exit))
-                    .content("Quit pola"),
+                    .content(tr!("Quit pola")),
             )
             .content(body)
             .grid_row(1);
@@ -252,7 +254,7 @@ impl Main {
                             .grid_column(1)
                             .is_enabled(!self.state.client.state().busy)
                             .on_click(context.message(Message::Run(name)))
-                            .content("Run"),
+                            .content(tr!("Run")),
                     )),
             )
         });
@@ -262,13 +264,13 @@ impl Main {
                 Border::new().padding(28.0).content(
                     StackPanel::new().spacing(16.0).children((
                         TextBlock::new()
-                            .text("Configurations")
+                            .text(tr!("Configurations"))
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
                         StackPanel::new().spacing(8.0).keyed_children(profiles),
                         Button::new()
                             .on_click(context.message(Message::Edit(None)))
-                            .content("New configuration"),
+                            .content(tr!("New configuration")),
                     )),
                 ),
             )
@@ -280,13 +282,7 @@ impl Main {
             .client
             .state()
             .next
-            .map(|event| {
-                format!(
-                    "Switch to {} at {}",
-                    event.mode,
-                    event.at.strftime("%a %H:%M")
-                )
-            })
+            .map(|event| crate::locale::next(&event).unwrap_or_else(|error| error))
             .unwrap_or_default();
         ScrollViewer::new()
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
@@ -294,11 +290,11 @@ impl Main {
                 Border::new().padding(28.0).content(
                     StackPanel::new().spacing(24.0).children((
                         TextBlock::new()
-                            .text("Appearance")
+                            .text(tr!("Appearance"))
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
                         RadioButtons::new()
-                            .items_source(["Light", "Dark"])
+                            .items_source([tr!("Light"), tr!("Dark")])
                             .max_columns(2)
                             .selected_index(
                                 self.mode

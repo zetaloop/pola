@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Action, Config},
+    locale::{self, tr},
     mode::Mode,
     schedule::Event,
 };
@@ -122,9 +123,9 @@ pub fn listen(ready: bool) -> io::Result<Option<(File, Listener)>> {
         match fs::symlink_metadata(&socket) {
             Ok(metadata) if metadata.file_type().is_socket() => fs::remove_file(socket)?,
             Ok(_) => {
-                return Err(io::Error::other(
-                    "daemon socket path is occupied by another file",
-                ));
+                return Err(io::Error::other(tr!(
+                    "daemon socket path is occupied by another file"
+                )));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
@@ -218,7 +219,7 @@ fn connect() -> io::Result<Stream> {
         let _ = child.wait();
     });
     let result: Result<(), String> = read(&mut BufReader::new(output))?
-        .ok_or_else(|| io::Error::other("daemon exited before opening its connection"))?;
+        .ok_or_else(|| io::Error::other(tr!("daemon exited before opening its connection")))?;
     result.map_err(io::Error::other)?;
     Stream::connect(name()?)
 }
@@ -261,7 +262,7 @@ impl Client {
                     result => {
                         let error = match result {
                             Err(error) => error.to_string(),
-                            _ => "Connection to pola background process closed".into(),
+                            _ => tr!("Connection to pola background process closed").into(),
                         };
                         let mut shared = shared.lock().unwrap();
                         shared.closed = Some(error.clone());
@@ -275,12 +276,14 @@ impl Client {
                 };
                 match response {
                     Response::State(state) => {
+                        locale::set(state.config.language);
                         shared.lock().unwrap().state = Some(state);
                         changed(None);
                     }
                     Response::Reply(result) => {
                         let mut shared = shared.lock().unwrap();
                         let result = result.map(|state| {
+                            locale::set(state.config.language);
                             shared.state = Some(state);
                         });
                         if let Some(pending) = shared.pending.take() {

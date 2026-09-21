@@ -1,3 +1,5 @@
+use crate::locale::tr;
+
 use objc2::{
     MainThreadOnly, define_class, msg_send,
     rc::Retained,
@@ -58,7 +60,9 @@ impl FileInput {
         this.setBezelStyle(NSTextFieldBezelStyle::RoundedBezel);
         this.setEditable(true);
         this.setSelectable(true);
-        this.setPlaceholderString(Some(&NSString::from_str("Drop a file or enter its path")));
+        this.setPlaceholderString(Some(&NSString::from_str(tr!(
+            "Drop a file or enter its path"
+        ))));
         this.registerForDraggedTypes(&NSArray::from_slice(&[unsafe { NSPasteboardTypeFileURL }]));
         unsafe {
             this.setDelegate(Some(ProtocolObject::from_ref(&*this)));

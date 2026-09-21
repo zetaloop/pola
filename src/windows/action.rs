@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::locale::tr;
+
 use windows_reactor::*;
 
 use crate::{config::Action, mode::Mode};
@@ -125,7 +127,7 @@ impl Component for Editor {
         });
         let fields: View = match &self.draft {
             Action::Color { mode } => RadioButtons::new()
-                .items_source(["Light", "Dark"])
+                .items_source([tr!("Light"), tr!("Dark")])
                 .selected_index(usize::from(*mode == Mode::Dark))
                 .on_selection_changed(context.callback(Message::Color))
                 .into(),
@@ -135,7 +137,7 @@ impl Component for Editor {
                 {
                     if self.preview_failed {
                         TextBlock::new()
-                            .text("Wallpaper preview unavailable")
+                            .text(tr!("Wallpaper preview unavailable"))
                             .into()
                     } else {
                         match Image::new().source_file(path) {
@@ -155,7 +157,7 @@ impl Component for Editor {
                 };
                 StackPanel::new().spacing(12.0).children((
                     preview,
-                    self.file_input("File", &path.to_string_lossy(), context),
+                    self.file_input(tr!("File"), &path.to_string_lossy(), context),
                 ))
             }
             Action::Command(command) => {
@@ -169,7 +171,7 @@ impl Component for Editor {
                                     .column_spacing(8.0)
                                     .children((
                                         TextBox::new()
-                                            .header(format!("Argument {}", index + 1))
+                                            .header(tr!("Argument {number}", number = index + 1))
                                             .text(value.clone())
                                             .accepts_return(true)
                                             .text_wrapping(TextWrapping::Wrap)
@@ -180,21 +182,21 @@ impl Component for Editor {
                                             .grid_column(1)
                                             .vertical_alignment(VerticalAlignment::Bottom)
                                             .on_click(context.message(Message::RemoveArgument(key)))
-                                            .content("Remove"),
+                                            .content(tr!("Remove")),
                                     )),
                             )
                         },
                     );
                 StackPanel::new().spacing(12.0).children((
-                    self.file_input("Program", &command.program, context),
+                    self.file_input(tr!("Program"), &command.program, context),
                     StackPanel::new().spacing(8.0).keyed_children(arguments),
                     Button::new()
                         .on_click(context.message(Message::AddArgument))
-                        .content("Add argument"),
+                        .content(tr!("Add argument")),
                     CheckBox::new()
                         .is_checked(command.wait)
                         .on_is_checked_changed(context.callback(Message::Wait))
-                        .content("Continue after the program exits"),
+                        .content(tr!("Continue after the program exits")),
                 ))
             }
         };
@@ -204,7 +206,7 @@ impl Component for Editor {
                 Border::new().padding(28.0).content(
                     StackPanel::new().spacing(20.0).children((
                         TextBlock::new()
-                            .text("Action")
+                            .text(tr!("Action"))
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
                         ComboBox::new()
@@ -224,10 +226,10 @@ impl Component for Editor {
                                 Button::new()
                                     .style(ButtonStyle::Accent)
                                     .on_click(context.message(Message::Save))
-                                    .content("Save"),
+                                    .content(tr!("Save")),
                                 Button::new()
                                     .on_click(context.message(Message::Cancel))
-                                    .content("Cancel"),
+                                    .content(tr!("Cancel")),
                             )),
                     )),
                 ),
@@ -248,14 +250,14 @@ impl Editor {
     fn file_input(&self, title: &str, value: &str, context: &ViewContext<Self>) -> View {
         Border::new()
             .drop_policy(DragDropPolicy::new().storage_items(
-                DragDropAction::new(DragDropOperation::Copy).caption("Use this file"),
+                DragDropAction::new(DragDropOperation::Copy).caption(tr!("Use this file")),
             ))
             .on_drop(context.callback(Message::Drop))
             .content(
                 TextBox::new()
                     .header(title)
                     .text(value)
-                    .placeholder_text("Drop a file or enter its path")
+                    .placeholder_text(tr!("Drop a file or enter its path"))
                     .on_text_changed(context.callback(Message::Path)),
             )
     }
@@ -263,14 +265,14 @@ impl Editor {
 
 fn dropped_file(data: DroppedData) -> Result<PathBuf, String> {
     let DroppedData::StorageItems(items) = data else {
-        return Err("Drop a file from File Explorer.".into());
+        return Err(tr!("Drop a file from File Explorer.").into());
     };
     let [item] = items.as_slice() else {
-        return Err("Drop one file at a time.".into());
+        return Err(tr!("Drop one file at a time.").into());
     };
     let path = PathBuf::from(&item.path);
     if !path.is_file() {
-        return Err("The dropped item must be a file.".into());
+        return Err(tr!("The dropped item must be a file.").into());
     }
     Ok(path)
 }

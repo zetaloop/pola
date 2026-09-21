@@ -1,7 +1,10 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use crate::locale::tr;
+
 mod config;
 mod ipc;
+mod locale;
 mod mode;
 mod runtime;
 mod schedule;
@@ -34,7 +37,7 @@ fn main() -> std::process::ExitCode {
         [entry, flag] if entry == "daemon" && flag == "--ready" => platform::daemon::run(true),
         [entry, name] if entry == "run" => name
             .to_str()
-            .ok_or_else(|| "Configuration name must be Unicode.".to_string())
+            .ok_or_else(|| tr!("Configuration name must be Unicode.").to_string())
             .and_then(|name| {
                 let client = ipc::Client::connect(|error| {
                     if let Some(error) = error {
@@ -46,7 +49,7 @@ fn main() -> std::process::ExitCode {
                     wait: true,
                 })
             }),
-        _ => Err("Usage: pola [daemon | run NAME]".into()),
+        _ => Err(tr!("Usage: pola [daemon | run NAME]").into()),
     };
     if let Err(error) = result {
         if !args.is_empty() {
@@ -55,7 +58,7 @@ fn main() -> std::process::ExitCode {
             }
             eprintln!("{error}");
         } else {
-            platform::show_error("Could not start pola", &error);
+            platform::show_error(tr!("Could not start pola"), &error);
         }
         return std::process::ExitCode::FAILURE;
     }
