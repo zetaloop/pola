@@ -11,14 +11,15 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct ProfileInput {
     pub state: Rc<AppState>,
-    pub mode: Mode,
+    pub name: Option<String>,
     pub profile: Profile,
+    pub finished: Callback<()>,
 }
 
 impl PartialEq for ProfileInput {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.state, &other.state)
-            && self.mode == other.mode
+            && self.name == other.name
             && self.profile == other.profile
     }
 }
@@ -27,7 +28,8 @@ pub(crate) struct Editor {
     state: Rc<AppState>,
     draft: Profile,
     saved: Profile,
-    mode: Mode,
+    name: Option<String>,
+    finished: Callback<()>,
     expanded: Option<usize>,
     preview_failed: bool,
     error: String,
@@ -35,6 +37,9 @@ pub(crate) struct Editor {
 
 #[derive(Clone)]
 pub(crate) enum Message {
+    Name(String),
+    When(Mode, bool),
+    Delete,
     Wallpaper(String),
     WallpaperDropped(DroppedData),
     ImageFailed,
@@ -47,7 +52,7 @@ pub(crate) enum Message {
     RemoveArgument(usize, usize),
     Argument(usize, usize, String),
     Save,
-    Reset,
+    Cancel,
     ClearError,
 }
 
@@ -60,7 +65,8 @@ impl Component for Editor {
             state: Rc::clone(&input.state),
             draft: input.profile.clone(),
             saved: input.profile.clone(),
-            mode: input.mode,
+            name: input.name.clone(),
+            finished: input.finished.clone(),
             expanded: None,
             preview_failed: false,
             error: String::new(),
@@ -68,7 +74,7 @@ impl Component for Editor {
     }
 
     fn input_changed(&mut self, input: &Self::Input, context: &ComponentContext<Self>) {
-        if self.mode != input.mode || self.saved != input.profile {
+        if self.name != input.name || self.saved != input.profile {
             *self = Self::create(input, context);
         }
     }
@@ -76,6 +82,25 @@ impl Component for Editor {
     fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
         self.error.clear();
         match message {
+            Message::Name(value) => self.draft.name = value,
+            Message::When(mode, enabled) => {
+                self.draft.when.retain(|value| *value != mode);
+                if enabled {
+                    self.draft.when.push(mode);
+                }
+            }
+            Message::Delete => {
+                if let Some(name) = &self.name {
+                    let mut config = self.state.config();
+                    config.profiles.retain(|profile| &profile.name != name);
+                    match self.state.save_config(config, self.state.launch_at_login()) {
+                        Ok(()) => {
+                            _ = self.finished.call(());
+                        }
+                        Err(error) => self.error = error,
+                    }
+                }
+            }
             Message::Wallpaper(value) => {
                 self.draft.wallpaper = (!value.is_empty()).then(|| PathBuf::from(value));
                 self.preview_failed = false;
@@ -162,19 +187,28 @@ impl Component for Editor {
                     return;
                 }
                 let mut config = self.state.config();
-                match self.mode {
-                    Mode::Light => config.light = self.draft.clone(),
-                    Mode::Dark => config.dark = self.draft.clone(),
+                if let Some(name) = &self.name {
+                    let Some(profile) = config
+                        .profiles
+                        .iter_mut()
+                        .find(|profile| &profile.name == name)
+                    else {
+                        self.error = "This configuration has been removed.".into();
+                        return;
+                    };
+                    *profile = self.draft.clone();
+                } else {
+                    config.profiles.push(self.draft.clone());
                 }
                 match self.state.save_config(config, self.state.launch_at_login()) {
-                    Ok(()) => self.saved = self.draft.clone(),
+                    Ok(()) => {
+                        _ = self.finished.call(());
+                    }
                     Err(error) => self.error = error,
                 }
             }
-            Message::Reset => {
-                self.draft = self.saved.clone();
-                self.expanded = None;
-                self.preview_failed = false;
+            Message::Cancel => {
+                _ = self.finished.call(());
             }
             Message::ClearError => {}
         }
@@ -305,9 +339,28 @@ impl Component for Editor {
             .horizontal_alignment(HorizontalAlignment::Stretch)
             .children((
                 TextBlock::new()
-                    .text(format!("{} appearance", self.mode))
+                    .text(self.name.as_deref().unwrap_or("New configuration"))
                     .font_size(28.0)
                     .font_weight(FontWeight::SEMI_BOLD),
+                TextBox::new()
+                    .header("Name")
+                    .text(self.draft.name.clone())
+                    .on_text_changed(context.callback(Message::Name)),
+                TextBlock::new().text("Run when switching to"),
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(16.0)
+                    .keyed_children([Mode::Light, Mode::Dark].map(|mode| {
+                        KeyedView::new(
+                            mode.to_string(),
+                            CheckBox::new()
+                                .is_checked(self.draft.when.contains(&mode))
+                                .on_is_checked_changed(
+                                    context.callback(move |enabled| Message::When(mode, enabled)),
+                                )
+                                .content(mode.to_string()),
+                        )
+                    })),
                 Border::new()
                     .background(ThemeBrush::CardBackground)
                     .border_brush(ThemeBrush::CardStroke)
@@ -334,9 +387,6 @@ impl Component for Editor {
                     .text("Commands")
                     .font_size(20.0)
                     .font_weight(FontWeight::SEMI_BOLD),
-                TextBlock::new()
-                    .text("Run these programs when this appearance becomes active.")
-                    .text_wrapping(TextWrapping::Wrap),
                 StackPanel::new().spacing(8.0).keyed_children(commands),
                 Button::new()
                     .on_click(context.message(Message::AddCommand))
@@ -367,11 +417,14 @@ impl Component for Editor {
                                     .style(ButtonStyle::Accent)
                                     .is_enabled(changed)
                                     .on_click(context.message(Message::Save))
-                                    .content("Save changes"),
+                                    .content("Save"),
                                 Button::new()
-                                    .is_enabled(changed)
-                                    .on_click(context.message(Message::Reset))
-                                    .content("Discard changes"),
+                                    .on_click(context.message(Message::Cancel))
+                                    .content("Cancel"),
+                                Button::new()
+                                    .is_enabled(self.name.is_some())
+                                    .on_click(context.message(Message::Delete))
+                                    .content("Delete configuration"),
                             )),
                     )),
             ))

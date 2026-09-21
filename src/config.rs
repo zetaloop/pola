@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     env,
     error::Error,
     fs,
@@ -13,12 +14,11 @@ use crate::{mode::Mode, schedule::Schedule};
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub shortcut: String,
     pub schedule: Schedule,
-    pub light: Profile,
-    pub dark: Profile,
+    pub profiles: Vec<Profile>,
 }
 
 impl Default for Config {
@@ -26,8 +26,7 @@ impl Default for Config {
         Self {
             shortcut: "ctrl+shift+alt+d".into(),
             schedule: Schedule::default(),
-            light: Profile::default(),
-            dark: Profile::default(),
+            profiles: Vec::new(),
         }
     }
 }
@@ -36,7 +35,11 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = path()?;
         match fs::read_to_string(path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
+            Ok(text) => {
+                let config: Self = toml::from_str(&text)?;
+                config.validate()?;
+                Ok(config)
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error.into()),
         }
@@ -54,17 +57,32 @@ impl Config {
         Ok(())
     }
 
-    pub fn profile(&self, mode: Mode) -> &Profile {
-        match mode {
-            Mode::Light => &self.light,
-            Mode::Dark => &self.dark,
+    pub fn profile(&self, name: &str) -> Option<&Profile> {
+        self.profiles.iter().find(|profile| profile.name == name)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let mut names = HashSet::new();
+        for profile in &self.profiles {
+            if profile.name.trim().is_empty() {
+                return Err("Enter a configuration name.".into());
+            }
+            if !names.insert(&profile.name) {
+                return Err(
+                    format!("A configuration named {:?} already exists.", profile.name).into(),
+                );
+            }
         }
+        Ok(())
     }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Profile {
+    pub name: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub when: Vec<Mode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

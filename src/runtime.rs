@@ -11,7 +11,7 @@ use crate::macos::system;
 #[cfg(target_os = "windows")]
 use crate::windows::system;
 use crate::{
-    config::Config,
+    config::{Config, Profile},
     ipc::{Incoming, Request, Response, State},
     mode::Mode,
     schedule::Event,
@@ -93,6 +93,7 @@ impl Runtime {
                     }
                     Request::Save(config) => self.save(config),
                     Request::Select(mode) => self.select(mode),
+                    Request::Run(name) => self.run(&name),
                     Request::Shortcut(text) => {
                         let result = self
                             .shortcut
@@ -126,6 +127,7 @@ impl Runtime {
     }
 
     pub fn save(&self, config: Config) -> Result<(), String> {
+        config.validate().map_err(|error| error.to_string())?;
         self.shortcut
             .borrow_mut()
             .register(&config.shortcut)
@@ -161,7 +163,40 @@ impl Runtime {
         if self.applied.replace(Some(mode)) == Some(mode) {
             return Ok(());
         }
-        let profile = self.config.borrow().profile(mode).clone();
+        let profiles = self
+            .config
+            .borrow()
+            .profiles
+            .iter()
+            .filter(|profile| profile.when.contains(&mode))
+            .cloned()
+            .collect::<Vec<_>>();
+        let errors = profiles
+            .iter()
+            .filter_map(|profile| {
+                self.apply_profile(profile)
+                    .err()
+                    .map(|error| format!("{}: {error}", profile.name))
+            })
+            .collect::<Vec<_>>();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("\n"))
+        }
+    }
+
+    pub fn run(&self, name: &str) -> Result<(), String> {
+        let profile = self
+            .config
+            .borrow()
+            .profile(name)
+            .cloned()
+            .ok_or_else(|| format!("Configuration {name:?} was not found."))?;
+        self.apply_profile(&profile)
+    }
+
+    fn apply_profile(&self, profile: &Profile) -> Result<(), String> {
         let mut errors = Vec::new();
         if let Some(path) = &profile.wallpaper
             && let Err(error) = system::set_wallpaper(path)

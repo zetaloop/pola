@@ -17,6 +17,7 @@ use crate::{
 pub(crate) mod daemon;
 mod file;
 mod profile;
+mod profiles;
 mod schedule;
 mod settings;
 mod shortcut;
@@ -83,7 +84,6 @@ define_class!(
             _insert: bool,
         ) -> Option<Retained<NSToolbarItem>> {
             let item = match identifier.to_string().as_str() {
-                "mode" => Some(("Appearance", "circle.lefthalf.filled", sel!(selectMode:))),
                 "settings" => Some(("Settings", "gearshape", sel!(showSettings:))),
                 _ => None,
             };
@@ -93,26 +93,9 @@ define_class!(
                 item.setLabel(&NSString::from_str(title));
                 item.setImage(Some(&ui::symbol(symbol, title)));
                 item.setBordered(true);
-                if identifier.to_string() == "mode" {
-                    let control = unsafe {
-                        NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                            &NSArray::from_retained_slice(&[
-                                NSString::from_str("Light"),
-                                NSString::from_str("Dark"),
-                            ]),
-                            NSSegmentSwitchTracking::SelectOne,
-                            Some(self),
-                            Some(action),
-                            self.mtm(),
-                        )
-                    };
-                    control.setControlSize(NSControlSize::Large);
-                    item.setView(Some(&control));
-                } else {
-                    unsafe {
-                        item.setTarget(Some(self));
-                        item.setAction(Some(action));
-                    }
+                unsafe {
+                    item.setTarget(Some(self));
+                    item.setAction(Some(action));
                 }
                 item
             })
@@ -122,7 +105,7 @@ define_class!(
     unsafe impl NSTableViewDataSource for Delegate {
         #[unsafe(method(numberOfRowsInTableView:))]
         fn navigation_rows(&self, _table: &NSTableView) -> isize {
-            2
+            3
         }
     }
 
@@ -136,11 +119,11 @@ define_class!(
             _column: Option<&NSTableColumn>,
             row: isize,
         ) -> Option<Retained<NSView>> {
-            let (name, symbol) = if row == 0 {
-                ("Appearance", "circle.lefthalf.filled")
-            } else {
-                ("Schedule", "calendar")
-            };
+            let (name, symbol) = [
+                ("Appearance", "circle.lefthalf.filled"),
+                ("Configurations", "list.bullet"),
+                ("Schedule", "calendar"),
+            ][row as usize];
             Some(ui::cell(self.mtm(), name, Some(&ui::symbol(symbol, name))).into_super())
         }
 
@@ -172,22 +155,9 @@ define_class!(
             self.update_window();
         }
 
-        #[unsafe(method(editAppearance:))]
-        fn edit_appearance(&self, sender: &NSButton) {
-            let window = self.ivars().window.get().unwrap();
-            window.window.makeFirstResponder(None);
-            let mode = if sender.tag() == 0 {
-                Mode::Light
-            } else {
-                Mode::Dark
-            };
-            window.inspect(mode);
-        }
-
-        #[unsafe(method(showSchedule:))]
-        fn show_schedule(&self, _sender: &NSObject) {
-            self.open_window();
-            self.ivars().window.get().unwrap().show_page(1);
+        #[unsafe(method(showProfiles:))]
+        fn profiles(&self, _sender: &NSObject) {
+            self.show_profiles();
         }
 
         #[unsafe(method(showSettings:))]
@@ -278,7 +248,6 @@ impl Delegate {
         if let Some(window) = self.ivars().window.get() {
             let state = self.ivars().client.state();
             window.update(
-                &state.config,
                 state.mode.expect("AppKit appearance is available"),
                 state.next.as_ref(),
             );
@@ -298,14 +267,6 @@ impl Delegate {
         Ok(())
     }
 
-    fn system_mode(&self) -> Mode {
-        self.ivars()
-            .client
-            .state()
-            .mode
-            .expect("AppKit appearance is available")
-    }
-
     fn select(&self, mode: Mode) {
         if let Err(error) = self.ivars().client.request(Request::Select(mode)) {
             show_error("Could not change appearance", &error);
@@ -313,16 +274,33 @@ impl Delegate {
         self.update_window();
     }
 
-    fn save_profile(&self, mode: Mode, profile: Profile) -> Result<(), String> {
+    fn save_profile(&self, name: Option<&str>, profile: Profile) -> Result<(), String> {
         let mut config = self.config();
-        if config.profile(mode) == &profile {
-            return Ok(());
-        }
-        match mode {
-            Mode::Light => config.light = profile,
-            Mode::Dark => config.dark = profile,
+        if let Some(name) = name {
+            let existing = config
+                .profiles
+                .iter_mut()
+                .find(|profile| profile.name == name)
+                .ok_or("This configuration has been removed.")?;
+            if existing == &profile {
+                return Ok(());
+            }
+            *existing = profile;
+        } else {
+            config.profiles.push(profile);
         }
         self.save_config(config)
+    }
+
+    fn run_profile(&self, name: &str) -> Result<(), String> {
+        self.ivars().client.request(Request::Run(name.into()))
+    }
+
+    fn show_profiles(&self) {
+        if let Some(window) = self.ivars().window.get() {
+            window.profiles.show_list();
+            window.show_page(1);
+        }
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), String> {
@@ -342,8 +320,6 @@ fn toolbar_identifiers() -> Retained<NSArray<NSToolbarItemIdentifier>> {
     NSArray::from_slice(&[
         unsafe { NSToolbarToggleSidebarItemIdentifier },
         unsafe { NSToolbarFlexibleSpaceItemIdentifier },
-        ns_string!("mode"),
-        unsafe { NSToolbarToggleInspectorItemIdentifier },
         ns_string!("settings"),
     ])
 }

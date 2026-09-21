@@ -183,6 +183,10 @@ impl AppState {
         self.notify_window();
     }
 
+    fn run_profile(&self, name: &str) -> Result<(), String> {
+        self.client.request(Request::Run(name.into()))
+    }
+
     fn register_hotkey(&self, text: &str) -> Result<(), String> {
         self.client.request(Request::Shortcut(text.into()))
     }

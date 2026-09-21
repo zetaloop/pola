@@ -25,6 +25,7 @@ pub enum Request {
     Subscribe,
     Save(Config),
     Select(Mode),
+    Run(String),
     Shortcut(String),
     Launch(bool),
 }
@@ -197,6 +198,7 @@ fn connect() -> io::Result<Stream> {
         .args(["daemon", "--ready"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .spawn()?;
     let output = child.stdout.take().unwrap();
     thread::spawn(move || {

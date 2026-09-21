@@ -1,6 +1,5 @@
 use std::rc::Rc;
 
-use jiff::Zoned;
 use windows_reactor::*;
 
 use super::{
@@ -9,7 +8,7 @@ use super::{
     schedule::{Editor as ScheduleEditor, ScheduleInput},
     settings::{Settings, SettingsInput},
 };
-use crate::mode::Mode;
+use crate::{config::Profile, mode::Mode};
 
 #[derive(Clone)]
 pub(crate) struct WindowInput(pub Rc<AppState>);
@@ -26,12 +25,16 @@ pub(crate) enum Event {
     Changed,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Page {
     Appearance,
+    Profiles,
     Schedule,
     Settings,
-    Profile(Mode),
+    Profile {
+        name: Option<String>,
+        profile: Profile,
+    },
 }
 
 pub(crate) struct Main {
@@ -46,14 +49,14 @@ pub(crate) struct Main {
 pub(crate) enum Message {
     Runtime(Event),
     Navigate(Option<String>),
-    Edit(Mode),
+    Edit(Option<String>),
+    Run(String),
     Back,
     Pane(bool),
     TogglePane,
-    Mode(bool),
+    Mode(Option<usize>),
     Exit,
     ClearError,
-    ImageFailed(Mode),
 }
 
 impl Component for Main {
@@ -84,26 +87,40 @@ impl Component for Main {
             Message::Runtime(Event::Changed) => self.mode = self.state.system_mode(),
             Message::Navigate(Some(tag)) => {
                 self.page = match tag.as_str() {
+                    "profiles" => Page::Profiles,
                     "schedule" => Page::Schedule,
                     "settings" => Page::Settings,
                     _ => Page::Appearance,
                 }
             }
             Message::Navigate(None) => {}
-            Message::Edit(mode) => self.page = Page::Profile(mode),
-            Message::Back => self.page = Page::Appearance,
+            Message::Edit(name) => {
+                let profile = match &name {
+                    Some(name) => match self.state.config().profile(name).cloned() {
+                        Some(profile) => profile,
+                        None => {
+                            self.status = "This configuration has been removed.".into();
+                            return;
+                        }
+                    },
+                    None => Profile::default(),
+                };
+                self.page = Page::Profile { name, profile };
+            }
+            Message::Run(name) => {
+                self.status = self.state.run_profile(&name).err().unwrap_or_default();
+            }
+            Message::Back => self.page = Page::Profiles,
             Message::Pane(value) => self.pane_open = value,
             Message::TogglePane => self.pane_open = !self.pane_open,
-            Message::Mode(dark) => {
+            Message::Mode(Some(index)) => {
                 self.state
-                    .select(if dark { Mode::Dark } else { Mode::Light });
+                    .select(if index == 1 { Mode::Dark } else { Mode::Light });
                 self.mode = self.state.system_mode();
             }
+            Message::Mode(None) => {}
             Message::Exit => self.state.exit(),
             Message::ClearError => self.status.clear(),
-            Message::ImageFailed(mode) => {
-                self.status = format!("Could not load the {mode} wallpaper preview.")
-            }
         }
     }
 
@@ -120,12 +137,14 @@ impl Component for Main {
                 }),
         );
         let config = self.state.config();
-        let content = match self.page {
+        let content = match &self.page {
             Page::Appearance => self.appearance(context),
-            Page::Profile(mode) => View::component::<Editor>(ProfileInput {
+            Page::Profiles => self.profiles(context),
+            Page::Profile { name, profile } => View::component::<Editor>(ProfileInput {
                 state: Rc::clone(&self.state),
-                mode,
-                profile: config.profile(mode).clone(),
+                name: name.clone(),
+                profile: profile.clone(),
+                finished: context.message(Message::Back),
             }),
             Page::Schedule => View::component::<ScheduleEditor>(ScheduleInput {
                 state: Rc::clone(&self.state),
@@ -147,7 +166,7 @@ impl Component for Main {
                     .on_closed(context.message(Message::ClearError)),
                 Border::new().grid_row(1).content(content),
             ));
-        let appearance_selected = matches!(self.page, Page::Appearance | Page::Profile(_));
+        let appearance_selected = self.page == Page::Appearance;
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Auto)
             .is_pane_open(self.pane_open)
@@ -166,6 +185,14 @@ impl Component for Main {
                         .is_selected(appearance_selected)
                         .icon(SymbolIcon::new().symbol(Symbol::Pictures))
                         .content("Appearance"),
+                ),
+                (
+                    "profiles",
+                    NavigationViewItem::new()
+                        .tag("profiles")
+                        .is_selected(matches!(self.page, Page::Profiles | Page::Profile { .. }))
+                        .icon(SymbolIcon::new().symbol(Symbol::List))
+                        .content("Configurations"),
                 ),
                 (
                     "schedule",
@@ -195,19 +222,11 @@ impl Component for Main {
         let title = TitleBar::new()
             .title("pola")
             .preferred_height(WindowTitleBarHeight::Tall)
-            .is_back_button_visible(matches!(self.page, Page::Profile(_)))
+            .is_back_button_visible(matches!(self.page, Page::Profile { .. }))
             .is_back_button_enabled(true)
             .on_back_requested(context.message(Message::Back))
             .is_pane_toggle_button_visible(true)
-            .on_pane_toggle_requested(context.message(Message::TogglePane))
-            .right_header(
-                ToggleSwitch::new()
-                    .is_enabled(self.mode.is_ok())
-                    .is_on(self.mode == Ok(Mode::Dark))
-                    .on_content("Dark")
-                    .off_content("Light")
-                    .on_toggled(context.callback(Message::Mode)),
-            );
+            .on_pane_toggle_requested(context.message(Message::TogglePane));
         Grid::new()
             .rows([GridLength::Auto, GridLength::STAR])
             .children((title, navigation))
@@ -215,71 +234,51 @@ impl Component for Main {
 }
 
 impl Main {
+    fn profiles(&self, context: &mut ViewContext<Self>) -> View {
+        let profiles = self.state.config().profiles.into_iter().map(|profile| {
+            let name = profile.name;
+            KeyedView::new(
+                name.clone(),
+                Grid::new()
+                    .columns([GridLength::STAR, GridLength::Auto])
+                    .column_spacing(8.0)
+                    .children((
+                        Button::new()
+                            .horizontal_alignment(HorizontalAlignment::Stretch)
+                            .horizontal_content_alignment(HorizontalAlignment::Left)
+                            .on_click(context.message(Message::Edit(Some(name.clone()))))
+                            .content(name.clone()),
+                        Button::new()
+                            .grid_column(1)
+                            .on_click(context.message(Message::Run(name)))
+                            .content("Run"),
+                    )),
+            )
+        });
+        ScrollViewer::new()
+            .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+            .content(
+                Border::new().padding(28.0).content(
+                    StackPanel::new().spacing(16.0).children((
+                        TextBlock::new()
+                            .text("Configurations")
+                            .font_size(28.0)
+                            .font_weight(FontWeight::SEMI_BOLD),
+                        StackPanel::new().spacing(8.0).keyed_children(profiles),
+                        Button::new()
+                            .on_click(context.message(Message::Edit(None)))
+                            .content("New configuration"),
+                    )),
+                ),
+            )
+    }
+
     fn appearance(&self, context: &mut ViewContext<Self>) -> View {
-        let config = self.state.config();
-        let cards = [Mode::Light, Mode::Dark]
-            .into_iter()
-            .enumerate()
-            .map(|(index, mode)| {
-                let profile = config.profile(mode);
-                let image: View = match &profile.wallpaper {
-                    Some(path) => match Image::new().source_file(path) {
-                        Ok(image) => image
-                            .on_failed(context.message(Message::ImageFailed(mode)))
-                            .stretch(Stretch::UniformToFill)
-                            .height(180.0)
-                            .into(),
-                        Err(error) => TextBlock::new()
-                            .text(error.to_string())
-                            .text_wrapping(TextWrapping::Wrap)
-                            .into(),
-                    },
-                    None => TextBlock::new()
-                        .text("Uses the current wallpaper")
-                        .text_wrapping(TextWrapping::Wrap)
-                        .into(),
-                };
-                let mut description = if self.mode == Ok(mode) {
-                    "Active".to_owned()
-                } else {
-                    String::new()
-                };
-                if !profile.commands.is_empty() {
-                    if !description.is_empty() {
-                        description.push('\n');
-                    }
-                    description.push_str(&match profile.commands.len() {
-                        1 => "1 command".into(),
-                        count => format!("{count} commands"),
-                    });
-                }
-                KeyedView::new(
-                    mode.to_string(),
-                    Border::new()
-                        .grid_column(index as i32)
-                        .background(ThemeBrush::CardBackground)
-                        .border_brush(ThemeBrush::CardStroke)
-                        .border_thickness(Thickness::uniform(1.0))
-                        .corner_radius(CornerRadius::uniform(8.0))
-                        .padding(20.0)
-                        .content(
-                            StackPanel::new().spacing(16.0).children((
-                                TextBlock::new()
-                                    .text(mode.to_string())
-                                    .font_size(20.0)
-                                    .font_weight(FontWeight::SEMI_BOLD),
-                                image,
-                                TextBlock::new().text(description),
-                                Button::new()
-                                    .on_click(context.message(Message::Edit(mode)))
-                                    .content("Edit appearance"),
-                            )),
-                        ),
-                )
-            });
-        let next = config
-            .schedule
-            .next(&Zoned::now())
+        let next = self
+            .state
+            .client
+            .state()
+            .next
             .map(|event| {
                 format!(
                     "Switch to {} at {}",
@@ -287,13 +286,7 @@ impl Main {
                     event.at.strftime("%a %H:%M")
                 )
             })
-            .unwrap_or_else(|| {
-                if config.schedule.enabled {
-                    "Add an arrangement to enable automatic switching.".into()
-                } else {
-                    "Schedule is off".into()
-                }
-            });
+            .unwrap_or_default();
         ScrollViewer::new()
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
             .content(
@@ -303,10 +296,16 @@ impl Main {
                             .text("Appearance")
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
-                        Grid::new()
-                            .columns([GridLength::STAR, GridLength::STAR])
-                            .column_spacing(16.0)
-                            .keyed_children(cards),
+                        RadioButtons::new()
+                            .items_source(["Light", "Dark"])
+                            .max_columns(2)
+                            .selected_index(
+                                self.mode
+                                    .as_ref()
+                                    .ok()
+                                    .map(|mode| usize::from(*mode == Mode::Dark)),
+                            )
+                            .on_selection_changed(context.callback(Message::Mode)),
                         TextBlock::new()
                             .text(next)
                             .text_wrapping(TextWrapping::Wrap),

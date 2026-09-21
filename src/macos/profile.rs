@@ -29,7 +29,11 @@ struct CommandForm {
 
 pub struct Ivars {
     owner: Weak<Delegate>,
-    mode: Mode,
+    key: RefCell<Option<String>>,
+    name: Retained<NSTextField>,
+    when: Retained<NSSegmentedControl>,
+    run: Retained<NSButton>,
+    delete: Retained<NSButton>,
     profile: RefCell<Profile>,
     view: Retained<NSView>,
     commands: Retained<NSTableView>,
@@ -52,10 +56,15 @@ define_class!(
         fn argument_changed(&self, notification: &NSNotification) {
             if let Some(object) = notification.object()
                 && let Ok(field) = object.downcast::<NSTextField>()
-                && let Some(form) = self.ivars().form.borrow_mut().as_mut()
-                && let Some(argument) = form.arguments.get_mut(field.tag() as usize)
             {
-                *argument = field.stringValue().to_string();
+                if ptr::eq(&*field, &*self.ivars().name) {
+                    let profile = self.ivars().profile.borrow().clone();
+                    self.save(profile);
+                } else if let Some(form) = self.ivars().form.borrow_mut().as_mut()
+                    && let Some(argument) = form.arguments.get_mut(field.tag() as usize)
+                {
+                    *argument = field.stringValue().to_string();
+                }
             }
         }
     }
@@ -119,6 +128,40 @@ define_class!(
     }
 
     impl Editor {
+        #[unsafe(method(whenChanged:))]
+        fn when_changed(&self, _sender: &NSObject) {
+            let profile = self.ivars().profile.borrow().clone();
+            self.save(profile);
+        }
+
+        #[unsafe(method(runProfile:))]
+        fn run_profile(&self, _sender: &NSObject) {
+            let key = self.ivars().key.borrow().clone();
+            if let Some(owner) = self.ivars().owner.load()
+                && let Some(name) = key
+            {
+                match owner.run_profile(&name) {
+                    Ok(()) => self.error(""),
+                    Err(error) => self.error(&error),
+                }
+            }
+        }
+
+        #[unsafe(method(deleteProfile:))]
+        fn delete_profile(&self, _sender: &NSObject) {
+            let key = self.ivars().key.borrow().clone();
+            if let Some(owner) = self.ivars().owner.load()
+                && let Some(name) = key
+            {
+                let mut config = owner.config();
+                config.profiles.retain(|profile| profile.name != name);
+                match owner.save_config(config) {
+                    Ok(()) => owner.show_profiles(),
+                    Err(error) => self.error(&error),
+                }
+            }
+        }
+
         #[unsafe(method(wallpaperChanged:))]
         fn wallpaper_changed(&self, input: &FileInput) {
             let path = input.value();
@@ -245,10 +288,44 @@ impl Editor {
     pub fn new(
         mtm: MainThreadMarker,
         owner: &Delegate,
-        mode: Mode,
+        key: Option<String>,
         profile: Profile,
     ) -> Retained<Self> {
         let view = NSView::new(mtm);
+        let name = NSTextField::textFieldWithString(&NSString::from_str(&profile.name), mtm);
+        let when = unsafe {
+            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
+                &objc2_foundation::NSArray::from_slice(&[
+                    objc2_foundation::ns_string!("Light"),
+                    objc2_foundation::ns_string!("Dark"),
+                ]),
+                NSSegmentSwitchTracking::SelectAny,
+                None,
+                Some(sel!(whenChanged:)),
+                mtm,
+            )
+        };
+        for (index, mode) in [Mode::Light, Mode::Dark].into_iter().enumerate() {
+            when.setSelected_forSegment(profile.when.contains(&mode), index as isize);
+        }
+        let run = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Run"),
+                None,
+                Some(sel!(runProfile:)),
+                mtm,
+            )
+        };
+        let delete = unsafe {
+            NSButton::buttonWithTitle_target_action(
+                &NSString::from_str("Delete configuration"),
+                None,
+                Some(sel!(deleteProfile:)),
+                mtm,
+            )
+        };
+        run.setEnabled(key.is_some());
+        delete.setEnabled(key.is_some());
         let commands = ui::table(mtm, "Commands");
         let edit = unsafe {
             NSButton::buttonWithImage_target_action(
@@ -270,7 +347,11 @@ impl Editor {
         error.setTextColor(Some(&NSColor::systemRedColor()));
         let this = Self::alloc(mtm).set_ivars(Ivars {
             owner: Weak::new(owner),
-            mode,
+            key: RefCell::new(key),
+            name,
+            when,
+            run,
+            delete,
             profile: RefCell::new(profile),
             view,
             commands,
@@ -281,6 +362,12 @@ impl Editor {
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
         unsafe {
+            this.ivars()
+                .name
+                .setDelegate(Some(ProtocolObject::from_ref(&*this)));
+            this.ivars().when.setTarget(Some(&this));
+            this.ivars().run.setTarget(Some(&this));
+            this.ivars().delete.setTarget(Some(&this));
             this.ivars()
                 .commands
                 .setDataSource(Some(ProtocolObject::from_ref(&*this)));
@@ -305,7 +392,18 @@ impl Editor {
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
         );
-        let name = ui::heading(mtm, &format!("{mode} appearance"));
+        let heading = ui::heading(mtm, "Configuration");
+        let name_label = ui::label(mtm, "Name");
+        let when_label = ui::label(mtm, "Run when switching to");
+        let metadata = ui::form(
+            mtm,
+            &[
+                [&name_label, &this.ivars().name],
+                [&when_label, &this.ivars().when],
+            ],
+        );
+        let back = ui::button(mtm, "Configurations", owner, sel!(showProfiles:));
+        let profile_actions = ui::actions(mtm, &[&back, &this.ivars().run, &this.ivars().delete]);
         let title = ui::label(mtm, "Wallpaper");
         let commands_title = ui::heading(mtm, "Commands");
         let add = unsafe {
@@ -329,7 +427,9 @@ impl Editor {
             mtm,
             false,
             &[
-                &name,
+                &heading,
+                &metadata,
+                &profile_actions,
                 &title,
                 &wallpaper,
                 &commands_title,
@@ -338,7 +438,13 @@ impl Editor {
                 &this.ivars().error,
             ],
         );
-        for view in [&*wallpaper as &NSView, &*commands, &*this.ivars().error] {
+        for view in [
+            &*metadata as &NSView,
+            &*profile_actions,
+            &*wallpaper,
+            &*commands,
+            &*this.ivars().error,
+        ] {
             view.widthAnchor()
                 .constraintEqualToAnchor(&content.widthAnchor())
                 .setActive(true);
@@ -353,12 +459,33 @@ impl Editor {
         &self.ivars().view
     }
 
-    fn save(&self, profile: Profile) -> bool {
+    pub fn focus(&self) {
+        if let Some(window) = self.ivars().view.window() {
+            window.makeFirstResponder(Some(&self.ivars().name));
+        }
+    }
+
+    fn save(&self, mut profile: Profile) -> bool {
         let Some(owner) = self.ivars().owner.load() else {
             return false;
         };
-        match owner.save_profile(self.ivars().mode, profile.clone()) {
+        profile.name = self.ivars().name.stringValue().to_string();
+        profile.when = [Mode::Light, Mode::Dark]
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, mode)| {
+                self.ivars()
+                    .when
+                    .isSelectedForSegment(index as isize)
+                    .then_some(mode)
+            })
+            .collect();
+        let key = self.ivars().key.borrow().clone();
+        match owner.save_profile(key.as_deref(), profile.clone()) {
             Ok(()) => {
+                *self.ivars().key.borrow_mut() = Some(profile.name.clone());
+                self.ivars().run.setEnabled(true);
+                self.ivars().delete.setEnabled(true);
                 *self.ivars().profile.borrow_mut() = profile;
                 self.error("");
                 true
