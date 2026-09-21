@@ -24,7 +24,7 @@ cargo build --profile MacOS --target-dir target/pola.app/Contents --config 'buil
 
 The app is written to `target/pola.app`. On Windows, the release build stages the self-contained Windows App Runtime beside `target/release/pola.exe`.
 
-On macOS, changing the system appearance uses System Events and may request Automation permission.
+On macOS, changing the system appearance uses System Events and may request Automation permission. Launch at login uses `~/Library/LaunchAgents/io.github.zetaloop.pola.plist`.
 
 ## Configuration
 

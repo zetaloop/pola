@@ -22,8 +22,6 @@
     <string>@VERSION@</string>
     <key>LSMinimumSystemVersion</key>
     <string>27.0</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>pola uses System Events to switch between light and dark appearance.</string>
 </dict>
