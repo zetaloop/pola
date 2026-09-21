@@ -16,6 +16,8 @@ pub(crate) struct ScheduleInput {
     pub state: Rc<AppState>,
     pub schedule: Schedule,
     pub active: bool,
+    pub opened: Callback<Callback<()>>,
+    pub editing: Callback<bool>,
 }
 
 impl PartialEq for ScheduleInput {
@@ -37,6 +39,7 @@ pub(crate) struct Editor {
     state: Rc<AppState>,
     schedule: Schedule,
     draft: Option<Draft>,
+    editing: Callback<bool>,
     error: String,
 }
 
@@ -44,7 +47,7 @@ pub(crate) struct Editor {
 pub(crate) enum Message {
     Enabled(bool),
     ApplyOnLaunch(bool),
-    Expand(Option<usize>, bool),
+    Edit(usize),
     Add,
     Cancel,
     Day(usize, bool),
@@ -59,11 +62,13 @@ impl Component for Editor {
     type Input = ScheduleInput;
     type Message = Message;
 
-    fn create(input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
+    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
+        _ = input.opened.call(context.sender().message(Message::Cancel));
         Self {
             state: Rc::clone(&input.state),
             schedule: input.schedule.clone(),
             draft: None,
+            editing: input.editing.clone(),
             error: String::new(),
         }
     }
@@ -85,14 +90,7 @@ impl Component for Editor {
                 schedule.apply_on_launch = value;
                 self.save(schedule);
             }
-            Message::Expand(Some(index), true) => {
-                if self
-                    .draft
-                    .as_ref()
-                    .is_some_and(|draft| draft.index == Some(index))
-                {
-                    return;
-                }
+            Message::Edit(index) => {
                 if let Some(rule) = self.schedule.rules.get(index) {
                     self.draft = Some(Draft {
                         index: Some(index),
@@ -100,16 +98,6 @@ impl Component for Editor {
                         time: Some(rule.time),
                         mode: rule.mode,
                     });
-                }
-            }
-            Message::Expand(None, true) => {}
-            Message::Expand(index, false) => {
-                if self
-                    .draft
-                    .as_ref()
-                    .is_some_and(|draft| draft.index == index)
-                {
-                    self.draft = None;
                 }
             }
             Message::Add => {
@@ -170,6 +158,7 @@ impl Component for Editor {
                 let mut schedule = self.schedule.clone();
                 if let Some(index) = draft.index {
                     let Some(saved) = schedule.rules.get_mut(index) else {
+                        self.error = tr!("This rule has been removed.").into();
                         return;
                     };
                     *saved = rule;
@@ -194,79 +183,83 @@ impl Component for Editor {
             }
             Message::ClearError => {}
         }
+        _ = self.editing.call(self.draft.is_some());
     }
 
     fn view(&self, input: &Self::Input, context: &mut ViewContext<Self>) -> View {
         if !input.active {
             return View::empty();
         }
-        let rules = self.schedule.rules.iter().enumerate().map(|(index, rule)| {
-            let caption = crate::locale::days(&rule.days)
-                .and_then(|days| {
-                    Ok(tr!(
-                        "{days} at {time}, switch to {mode}",
-                        days = days,
-                        time = super::locale::time(rule.time)?,
-                        mode = rule.mode.label()
-                    ))
-                })
-                .unwrap_or_else(|error| error);
-            let expanded = self
-                .draft
-                .as_ref()
-                .is_some_and(|draft| draft.index == Some(index));
-            KeyedView::new(
-                format!("rule-{index}"),
-                Expander::new()
-                    .horizontal_alignment(HorizontalAlignment::Stretch)
-                    .header(
-                        TextBlock::new()
-                            .text(caption)
-                            .text_wrapping(TextWrapping::Wrap),
-                    )
-                    .is_expanded(expanded)
-                    .on_is_expanded_changed(
-                        context.callback(move |open| Message::Expand(Some(index), open)),
-                    )
-                    .content(if expanded {
-                        self.editor(context)
-                    } else {
-                        View::empty()
-                    }),
-            )
-        });
-        let new_rule: View = if self
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.index.is_none())
-        {
-            Expander::new()
-                .header(tr!("New rule"))
-                .is_expanded(true)
-                .horizontal_alignment(HorizontalAlignment::Stretch)
-                .on_is_expanded_changed(context.callback(|open| Message::Expand(None, open)))
-                .content(self.editor(context))
-                .into()
+        let body = if self.draft.is_some() {
+            self.editor(context)
         } else {
-            View::empty()
-        };
-        let content = StackPanel::new().spacing(20.0).max_width(800.0).children((
-                TextBlock::new().text(tr!("Schedule")).font_size(28.0).font_weight(FontWeight::SEMI_BOLD),
-                ToggleSwitch::new().header(tr!("Automatic switching")).is_on(self.schedule.enabled)
+            let rules = self.schedule.rules.iter().enumerate().map(|(index, rule)| {
+                let time = super::locale::time(rule.time).unwrap_or_else(|error| error);
+                let detail = tr!(
+                    "{days}, {mode}",
+                    days = crate::locale::days(&rule.days).unwrap_or_else(|error| error),
+                    mode = rule.mode.label()
+                );
+                KeyedView::new(
+                    index.to_string(),
+                    Button::new()
+                        .style(ButtonStyle::Subtle)
+                        .horizontal_alignment(HorizontalAlignment::Stretch)
+                        .horizontal_content_alignment(HorizontalAlignment::Stretch)
+                        .on_click(context.message(Message::Edit(index)))
+                        .content(
+                            StackPanel::new().spacing(4.0).children((
+                                TextBlock::new()
+                                    .text(time)
+                                    .font_size(24.0)
+                                    .font_weight(FontWeight::SEMI_BOLD),
+                                TextBlock::new()
+                                    .text(detail)
+                                    .text_wrapping(TextWrapping::Wrap),
+                            )),
+                        ),
+                )
+            });
+            StackPanel::new().spacing(16.0).children((
+                ToggleSwitch::new()
+                    .header(tr!("Automatic switching"))
+                    .is_on(self.schedule.enabled)
                     .on_toggled(context.callback(Message::Enabled)),
-                TextBlock::new().text(tr!("Manual changes take effect immediately. Future scheduled changes continue normally."))
-                    .text_wrapping(TextWrapping::Wrap),
-                InfoBar::new().is_open(!self.error.is_empty()).severity(InfoBarSeverity::Error)
-                    .message(self.error.clone()).on_closed(context.message(Message::ClearError)),
-                StackPanel::new().spacing(8.0).keyed_children(rules),
-                new_rule,
-                Button::new().on_click(context.message(Message::Add)).content(tr!("Add rule")),
-                ToggleSwitch::new().header(tr!("Apply schedule on launch")).is_on(self.schedule.apply_on_launch)
+                ToggleSwitch::new()
+                    .header(tr!("Apply schedule on launch"))
+                    .is_on(self.schedule.apply_on_launch)
                     .on_toggled(context.callback(Message::ApplyOnLaunch)),
-            ));
+                Button::new()
+                    .on_click(context.message(Message::Add))
+                    .content(tr!("Add rule")),
+                StackPanel::new().spacing(8.0).keyed_children(rules),
+            ))
+        };
+        let content = StackPanel::new().spacing(20.0).children((
+            TextBlock::new()
+                .text(
+                    if self
+                        .draft
+                        .as_ref()
+                        .is_some_and(|draft| draft.index.is_none())
+                    {
+                        tr!("New rule")
+                    } else {
+                        tr!("Schedule")
+                    },
+                )
+                .font_size(28.0)
+                .font_weight(FontWeight::SEMI_BOLD),
+            body,
+            InfoBar::new()
+                .is_open(!self.error.is_empty())
+                .severity(InfoBarSeverity::Error)
+                .message(self.error.clone())
+                .on_closed(context.message(Message::ClearError)),
+        ));
         ScrollViewer::new()
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-            .content(Border::new().padding(28.0).content(content))
+            .content(Border::new().padding(24.0).content(content))
     }
 }
 
@@ -303,7 +296,9 @@ impl Editor {
         let days = names.iter().enumerate().map(|(index, name)| {
             KeyedView::new(
                 index.to_string(),
-                ToggleButton::new()
+                CheckBox::new()
+                    .grid_row((index / 4) as i32)
+                    .grid_column((index % 4) as i32)
                     .is_checked(draft.days[index])
                     .on_is_checked_changed(
                         context.callback(move |value| Message::Day(index, value)),
@@ -318,12 +313,14 @@ impl Editor {
         } else {
             View::empty()
         };
+        let time = draft.time.map_or_else(View::empty, |time| {
+            TextBlock::new()
+                .text(super::locale::time(time).unwrap_or_else(|error| error))
+                .font_size(24.0)
+                .into()
+        });
         StackPanel::new().spacing(16.0).children((
-            TextBlock::new().text(tr!("Days")),
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(4.0)
-                .keyed_children(days),
+            time,
             TimePicker::new()
                 .clock_identifier(clock)
                 .header(if draft.index.is_some() {
@@ -332,6 +329,13 @@ impl Editor {
                     tr!("Time")
                 })
                 .on_selected_time_changed(context.callback(Message::Time)),
+            TextBlock::new().text(tr!("Days")),
+            Grid::new()
+                .columns([GridLength::STAR; 4])
+                .rows([GridLength::Auto; 2])
+                .column_spacing(8.0)
+                .row_spacing(8.0)
+                .keyed_children(days),
             ComboBox::new()
                 .header(tr!("Appearance"))
                 .items_source([tr!("Light"), tr!("Dark")])

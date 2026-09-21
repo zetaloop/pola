@@ -15,6 +15,7 @@ pub(crate) struct SettingsInput {
     pub state: Rc<AppState>,
     pub config: Config,
     pub active: bool,
+    pub focused: bool,
 }
 
 impl PartialEq for SettingsInput {
@@ -22,14 +23,14 @@ impl PartialEq for SettingsInput {
         Rc::ptr_eq(&self.state, &other.state)
             && self.config == other.config
             && self.active == other.active
+            && self.focused == other.focused
     }
 }
 
 pub(crate) struct Settings {
     state: Rc<AppState>,
-    recorder: ElementRef<Border>,
     recording: bool,
-    pending: Option<String>,
+    pending: Option<(VirtualKey, String)>,
     error: String,
 }
 
@@ -39,10 +40,9 @@ pub(crate) enum Message {
     Launch(bool),
     Record,
     Pressed(KeyEventInfo),
-    Released,
+    Released(KeyEventInfo),
     Cancel,
     Remove,
-    FocusFailed,
     ClearError,
 }
 
@@ -53,7 +53,6 @@ impl Component for Settings {
     fn create(input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
         Self {
             state: Rc::clone(&input.state),
-            recorder: ElementRef::new(),
             recording: false,
             pending: None,
             error: String::new(),
@@ -61,13 +60,13 @@ impl Component for Settings {
     }
 
     fn input_changed(&mut self, input: &Self::Input, _context: &ComponentContext<Self>) {
-        if !input.active {
+        if !input.active || !input.focused {
             self.finish();
         }
     }
 
     fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
-        if !matches!(message, Message::Released | Message::Cancel) {
+        if !matches!(message, Message::Released(_) | Message::Cancel) {
             self.error.clear();
         }
         match message {
@@ -88,17 +87,21 @@ impl Component for Settings {
                     self.error = error;
                 }
             }
-            Message::Record => match self.state.register_hotkey("") {
-                Ok(()) => {
-                    self.recording = true;
-                    self.pending = None;
+            Message::Record => {
+                if !self.recording {
+                    match self.state.register_hotkey("") {
+                        Ok(()) => {
+                            self.recording = true;
+                            self.pending = None;
+                        }
+                        Err(error) => self.error = error,
+                    }
                 }
-                Err(error) => self.error = error.to_string(),
-            },
+            }
             Message::Pressed(info) => {
                 if self.recording {
                     match shortcut(info) {
-                        Ok(Some(value)) => self.pending = Some(value),
+                        Ok(Some(value)) => self.pending = Some((info.original_key, value)),
                         Ok(None) => {}
                         Err(error) => {
                             self.pending = None;
@@ -107,19 +110,20 @@ impl Component for Settings {
                     }
                 }
             }
-            Message::Released => {
+            Message::Released(info) => {
                 if self.recording
-                    && let Some(shortcut) = self.pending.take()
+                    && let Some((key, shortcut)) = &self.pending
+                    && *key == info.original_key
                 {
                     self.error.clear();
                     let mut config = self.state.config();
-                    config.shortcut = shortcut;
+                    config.shortcut = shortcut.clone();
                     match self.state.save_config(config, self.state.launch_at_login()) {
-                        Ok(()) => self.recording = false,
-                        Err(error) => {
-                            self.error = error;
-                            self.finish();
+                        Ok(()) => {
+                            self.recording = false;
+                            self.pending = None;
                         }
+                        Err(error) => self.error = error,
                     }
                 }
             }
@@ -131,10 +135,6 @@ impl Component for Settings {
                     self.error = error;
                 }
             }
-            Message::FocusFailed => {
-                self.error = tr!("Could not focus the shortcut recorder.").into();
-                self.finish();
-            }
             Message::ClearError => {}
         }
     }
@@ -143,90 +143,74 @@ impl Component for Settings {
         if !input.active {
             return View::empty();
         }
-        if self.recording {
-            let recorder = self.recorder.clone();
-            let failed = context.message(Message::FocusFailed);
-            let completed = failed.clone();
-            context.use_effect("shortcut-focus", (), move || {
-                if !recorder.request_focus_result(move |result| {
-                    if !matches!(result, Ok(true)) {
-                        _ = completed.call(());
-                    }
-                }) {
-                    _ = failed.call(());
-                }
-                None
-            });
-        }
-        let shortcut: View = if self.recording {
-            StackPanel::new().spacing(12.0).children((
-                Border::new()
-                    .element_ref(&self.recorder)
-                    .is_tab_stop(true)
-                    .focus_on_pointer_release(true)
-                    .automation_name(tr!("Record global shortcut"))
-                    .background(ThemeBrush::CardBackground)
-                    .border_brush(ThemeBrush::CardStroke)
-                    .border_thickness(1.0)
-                    .corner_radius(8.0)
-                    .padding(20.0)
-                    .on_preview_key_down(context.routed_callback(|info: KeyEventInfo| {
-                        let modifiers = info.modifiers;
-                        if info.key == VirtualKey::TAB
-                            && !modifiers.contains(InputModifiers::CONTROL)
-                            && !modifiers.contains(InputModifiers::ALT)
-                            && !modifiers.contains(InputModifiers::WINDOWS)
-                        {
-                            RoutedMessage::bubble_without_message()
-                        } else if info.key == VirtualKey::ESCAPE
-                            && modifiers == InputModifiers::NONE
-                        {
-                            RoutedMessage::handled(Message::Cancel)
-                        } else {
-                            RoutedMessage::handled(Message::Pressed(info))
-                        }
-                    }))
-                    .on_key_up(
-                        context.routed_callback(|_| RoutedMessage::handled(Message::Released)),
-                    )
-                    .on_lost_focus(context.callback(|_| Message::Cancel))
-                    .content(
-                        TextBlock::new().text(
-                            self.pending
-                                .as_deref()
-                                .unwrap_or(tr!("Press a key combination")),
-                        ),
-                    ),
-                Button::new()
-                    .on_click(context.message(Message::Cancel))
-                    .content(tr!("Cancel recording")),
-            ))
+        let recording = self.recording;
+        let label = if recording {
+            self.pending
+                .as_ref()
+                .map(|(_, text)| text.as_str())
+                .unwrap_or(tr!("Press a key combination"))
+        } else if input.config.shortcut.is_empty() {
+            tr!("Record shortcut")
         } else {
-            StackPanel::new().spacing(12.0).children((
-                TextBlock::new().text(if input.config.shortcut.is_empty() {
-                    tr!("None")
+            &input.config.shortcut
+        };
+        let cancel = if recording {
+            Button::new()
+                .grid_column(1)
+                .on_click(context.message(Message::Cancel))
+                .content(tr!("Cancel"))
+        } else {
+            View::empty()
+        };
+        let clear = if !recording {
+            Button::new()
+                .grid_column(2)
+                .is_enabled(!input.config.shortcut.is_empty())
+                .on_click(context.message(Message::Remove))
+                .content(tr!("Clear"))
+        } else {
+            View::empty()
+        };
+        let shortcut = Border::new()
+            .on_preview_key_down(context.routed_callback(move |info: KeyEventInfo| {
+                if !recording || info.key == VirtualKey::TAB {
+                    RoutedMessage::bubble_without_message()
+                } else if info.key == VirtualKey::ESCAPE && info.modifiers == InputModifiers::NONE {
+                    RoutedMessage::handled(Message::Cancel)
                 } else {
-                    &input.config.shortcut
-                }),
-                StackPanel::new()
-                    .orientation(Orientation::Horizontal)
-                    .spacing(8.0)
+                    RoutedMessage::handled(Message::Pressed(info))
+                }
+            }))
+            .on_key_up(context.routed_callback(move |info| {
+                if recording {
+                    RoutedMessage::handled(Message::Released(info))
+                } else {
+                    RoutedMessage::bubble_without_message()
+                }
+            }))
+            .on_lost_focus(context.callback(|_| Message::Cancel))
+            .content(
+                Grid::new()
+                    .columns([GridLength::STAR, GridLength::Auto, GridLength::Auto])
+                    .column_spacing(8.0)
                     .children((
                         Button::new()
+                            .automation_name(tr!("Record global shortcut"))
                             .on_click(context.message(Message::Record))
-                            .content(tr!("Record shortcut")),
-                        Button::new()
-                            .is_enabled(!input.config.shortcut.is_empty())
-                            .on_click(context.message(Message::Remove))
-                            .content(tr!("Remove shortcut")),
+                            .content(
+                                TextBlock::new()
+                                    .text(label)
+                                    .text_wrapping(TextWrapping::Wrap),
+                            ),
+                        cancel,
+                        clear,
                     )),
-            ))
-        };
+            );
         ScrollViewer::new()
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
             .content(
-                Border::new().padding(28.0).content(
-                    StackPanel::new().spacing(24.0).max_width(800.0).children((
+                Border::new().padding(24.0).content(
+                    StackPanel::new().spacing(20.0).children((
                         TextBlock::new()
                             .text(tr!("Settings"))
                             .font_size(28.0)
@@ -239,22 +223,15 @@ impl Component for Settings {
                                 Some(Locale::English) => 1,
                                 Some(Locale::Chinese) => 2,
                             })
-                            .is_enabled(!self.recording)
                             .on_selection_changed(context.callback(Message::Language)),
                         ToggleSwitch::new()
                             .header(tr!("Launch at login"))
                             .is_on(self.state.launch_at_login())
-                            .is_enabled(!self.recording)
                             .on_toggled(context.callback(Message::Launch)),
                         TextBlock::new()
                             .text(tr!("Global shortcut"))
                             .font_size(20.0)
                             .font_weight(FontWeight::SEMI_BOLD),
-                        TextBlock::new()
-                            .text(tr!(
-                                "Switch between light and dark appearance from any application."
-                            ))
-                            .text_wrapping(TextWrapping::Wrap),
                         shortcut,
                         InfoBar::new()
                             .is_open(!self.error.is_empty())

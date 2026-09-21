@@ -25,6 +25,7 @@ impl PartialEq for WindowInput {
 pub(crate) enum Event {
     Activate,
     Changed,
+    Focus(bool),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -41,6 +42,9 @@ pub(crate) struct Main {
     editing: Option<(Option<String>, Profile)>,
     selected: Option<String>,
     back: Option<Callback<()>>,
+    schedule_back: Option<Callback<()>>,
+    schedule_editing: bool,
+    focused: bool,
     mode: Result<Mode, String>,
     status: String,
 }
@@ -55,6 +59,8 @@ pub(crate) enum Message {
     Run(String),
     Back,
     BindBack(Callback<()>),
+    BindScheduleBack(Callback<()>),
+    ScheduleEditing(bool),
     Finished,
     Mode(Option<usize>),
     ClearError,
@@ -74,6 +80,9 @@ impl Component for Main {
             editing: None,
             selected: None,
             back: None,
+            schedule_back: None,
+            schedule_editing: false,
+            focused: true,
             mode: input.0.system_mode(),
             status: String::new(),
         }
@@ -88,6 +97,7 @@ impl Component for Main {
                 self.mode = self.state.system_mode();
             }
             Message::Runtime(Event::Changed) => self.mode = self.state.system_mode(),
+            Message::Runtime(Event::Focus(value)) => self.focused = value,
             Message::Navigate(Some(tag)) => {
                 self.page = match tag.as_str() {
                     "profiles" => Page::Profiles,
@@ -135,11 +145,18 @@ impl Component for Main {
                 self.status = self.state.run_profile(&name).err().unwrap_or_default();
             }
             Message::Back => {
-                if let Some(back) = &self.back {
+                let back = if self.page == Page::Schedule {
+                    &self.schedule_back
+                } else {
+                    &self.back
+                };
+                if let Some(back) = back {
                     _ = back.call(());
                 }
             }
             Message::BindBack(back) => self.back = Some(back),
+            Message::BindScheduleBack(back) => self.schedule_back = Some(back),
+            Message::ScheduleEditing(editing) => self.schedule_editing = editing,
             Message::Finished => {
                 self.editing = None;
                 self.back = None;
@@ -201,11 +218,14 @@ impl Component for Main {
                 state: Rc::clone(&self.state),
                 schedule: config.schedule.clone(),
                 active: self.page == Page::Schedule,
+                opened: context.callback(Message::BindScheduleBack),
+                editing: context.callback(Message::ScheduleEditing),
             }),
             View::component::<Settings>(SettingsInput {
                 state: Rc::clone(&self.state),
                 config,
                 active: self.page == Page::Settings,
+                focused: self.focused,
             }),
         ));
         let error = self.mode.as_ref().err().unwrap_or(&self.status);
@@ -264,8 +284,15 @@ impl Component for Main {
             .grid_row(1);
         let title = TitleBar::new()
             .title("pola")
-            .is_back_button_visible(self.page == Page::Profiles && self.editing.is_some())
-            .is_back_button_enabled(self.back.is_some())
+            .is_back_button_visible(
+                (self.page == Page::Profiles && self.editing.is_some())
+                    || (self.page == Page::Schedule && self.schedule_editing),
+            )
+            .is_back_button_enabled(if self.page == Page::Schedule {
+                self.schedule_back.is_some()
+            } else {
+                self.back.is_some()
+            })
             .on_back_requested(context.message(Message::Back));
         Grid::new()
             .rows([GridLength::Auto, GridLength::STAR])

@@ -317,6 +317,9 @@ macro_rules! zh {
     ("This configuration has been removed.") => {
         "此配置已被删除。"
     };
+    ("This rule has been removed.") => {
+        "此计划已被删除。"
+    };
     ("This action has been removed.") => {
         "此动作已被删除。"
     };

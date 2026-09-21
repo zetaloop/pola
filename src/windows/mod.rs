@@ -8,7 +8,7 @@ use windows::{
         Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, LPARAM, WPARAM},
         System::Threading::CreateMutexW,
         UI::WindowsAndMessaging::{
-            FindWindowW, MB_ICONERROR, MB_OK, MessageBoxW, PostMessageW, WM_APP,
+            FindWindowW, MB_ICONERROR, MB_OK, MessageBoxW, PostMessageW, WM_ACTIVATEAPP, WM_APP,
         },
     },
     core::{PCWSTR, w},
@@ -81,10 +81,15 @@ impl AppState {
         let window = Window::new("io.github.zetaloop.pola.frontend")
             .visible(false)
             .quit_on_close(false)
-            .on_message(move |_, message, _, _| {
+            .on_message(move |_, message, wparam, _| {
                 if message == SHOW_WINDOW {
                     if let Some(state) = state.upgrade() {
                         state.open_window();
+                    }
+                    Some(0)
+                } else if message == WM_ACTIVATEAPP {
+                    if let Some(state) = state.upgrade() {
+                        state.notify_window(window::Event::Focus(wparam != 0));
                     }
                     Some(0)
                 } else {
@@ -135,13 +140,13 @@ impl AppState {
         }
     }
 
-    fn notify_window(&self) {
+    fn notify_window(&self, event: window::Event) {
         let callback = match &*self.window.borrow() {
             OpenWindow::Open(callback) => Some(callback.clone()),
             _ => None,
         };
         if let Some(callback) = callback {
-            _ = callback.call(window::Event::Changed);
+            _ = callback.call(event);
         }
     }
 
@@ -181,7 +186,7 @@ impl AppState {
         if language_changed {
             locale::apply()?;
         }
-        self.notify_window();
+        self.notify_window(window::Event::Changed);
         Ok(())
     }
 
@@ -208,7 +213,7 @@ impl AppState {
         if let Err(error) = self.client.request(Request::Select(mode)) {
             show_error(tr!("Could not change appearance"), &error);
         }
-        self.notify_window();
+        self.notify_window(window::Event::Changed);
     }
 
     fn run_profile(&self, name: &str) -> Result<(), String> {
@@ -266,7 +271,7 @@ pub fn run() -> Result<(), String> {
         let client = Client::connect(move |error| {
             if let Err(dispatch_error) = proxy.dispatch(move |_| {
                 if let Some(state) = APP.with(|slot| slot.borrow().clone()) {
-                    state.notify_window();
+                    state.notify_window(window::Event::Changed);
                     if let Some(error) = error {
                         show_error("pola", &error);
                     }
