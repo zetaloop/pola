@@ -6,7 +6,8 @@ use windows_reactor::*;
 use super::{
     AppState,
     profile::{Editor, ProfileInput},
-    settings::{Section, Settings, SettingsInput},
+    schedule::{Editor as ScheduleEditor, ScheduleInput},
+    settings::{Settings, SettingsInput},
 };
 use crate::mode::Mode;
 
@@ -111,7 +112,12 @@ impl Component for Main {
         context.window_visuals(
             WindowVisuals::new()
                 .backdrop(WindowBackdrop::Mica)
-                .client_size(960.0, 640.0),
+                .client_size(960.0, 640.0)
+                .constraints(WindowConstraints {
+                    min_width: Some(640.0),
+                    min_height: Some(480.0),
+                    ..Default::default()
+                }),
         );
         let config = self.state.config();
         let content = match self.page {
@@ -121,13 +127,13 @@ impl Component for Main {
                 mode,
                 profile: config.profile(mode).clone(),
             }),
-            page => View::component::<Settings>(SettingsInput {
+            Page::Schedule => View::component::<ScheduleEditor>(ScheduleInput {
                 state: Rc::clone(&self.state),
-                config: config.clone(),
-                section: match page {
-                    Page::Schedule => Section::Schedule,
-                    _ => Section::General,
-                },
+                schedule: config.schedule,
+            }),
+            Page::Settings => View::component::<Settings>(SettingsInput {
+                state: Rc::clone(&self.state),
+                config,
             }),
         };
         let error = self.mode.as_ref().err().unwrap_or(&self.status);

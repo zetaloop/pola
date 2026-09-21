@@ -41,6 +41,7 @@ use crate::{
 };
 
 mod profile;
+mod schedule;
 mod settings;
 mod window;
 

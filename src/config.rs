@@ -1,4 +1,10 @@
-use std::{env, error::Error, fs, io, path::PathBuf};
+use std::{
+    env,
+    error::Error,
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,11 +43,14 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
+        let text = toml::to_string_pretty(self)?;
         let path = path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, toml::to_string_pretty(self)?)?;
+        let parent = path.parent().unwrap();
+        fs::create_dir_all(parent)?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        file.write_all(text.as_bytes())?;
+        file.as_file().sync_all()?;
+        file.persist(path)?;
         Ok(())
     }
 
