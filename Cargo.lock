@@ -355,6 +355,7 @@ dependencies = [
  "windows",
  "windows-bindgen",
  "windows-core 0.62.2",
+ "windows-pickers",
  "windows-reactor",
  "windows-reactor-setup",
  "windows-registry",
@@ -742,6 +743,16 @@ version = "0.100.0"
 source = "git+https://github.com/microsoft/windows-rs.git#a38689a8b29520db84e3d398e4389d48f18e6346"
 dependencies = [
  "windows-core 0.100.0",
+]
+
+[[package]]
+name = "windows-pickers"
+version = "0.100.0"
+source = "git+https://github.com/microsoft/windows-rs.git#a38689a8b29520db84e3d398e4389d48f18e6346"
+dependencies = [
+ "windows-core 0.100.0",
+ "windows-reactor",
+ "windows-window",
 ]
 
 [[package]]

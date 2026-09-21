@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::locale::tr;
 
@@ -39,6 +39,7 @@ pub(crate) struct Main {
     state: Rc<AppState>,
     page: Page,
     editing: Option<(Option<String>, Profile)>,
+    selected: Option<String>,
     back: Option<Callback<()>>,
     mode: Result<Mode, String>,
     status: String,
@@ -49,6 +50,8 @@ pub(crate) enum Message {
     Runtime(Event),
     Navigate(Option<String>),
     Edit(Option<String>),
+    ProfileChanged(String),
+    Reorder(Vec<String>),
     Run(String),
     Back,
     BindBack(Callback<()>),
@@ -69,6 +72,7 @@ impl Component for Main {
             state: Rc::clone(&input.0),
             page: Page::Appearance,
             editing: None,
+            selected: None,
             back: None,
             mode: input.0.system_mode(),
             status: String::new(),
@@ -104,7 +108,28 @@ impl Component for Main {
                     },
                     None => Profile::default(),
                 };
+                self.selected = name.clone();
                 self.editing = Some((name, profile));
+            }
+            Message::ProfileChanged(name) => {
+                self.selected = Some(name.clone());
+                if let Some(profile) = self.state.config().profile(&name).cloned() {
+                    self.editing = Some((Some(name), profile));
+                }
+            }
+            Message::Reorder(tags) => {
+                let order: HashMap<_, _> = tags
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, name)| (name, index))
+                    .collect();
+                let mut config = self.state.config();
+                config.profiles.sort_by_key(|profile| order[&profile.name]);
+                self.status = self
+                    .state
+                    .save_config(config, self.state.launch_at_login())
+                    .err()
+                    .unwrap_or_default();
             }
             Message::Run(name) => {
                 self.status = self.state.run_profile(&name).err().unwrap_or_default();
@@ -152,6 +177,7 @@ impl Component for Main {
                     profile: profile.clone(),
                     active: self.page == Page::Profiles,
                     opened: context.callback(Message::BindBack),
+                    changed: context.callback(Message::ProfileChanged),
                     finished: context.message(Message::Finished),
                 })
             });
@@ -249,25 +275,33 @@ impl Component for Main {
 
 impl Main {
     fn profiles(&self, context: &mut ViewContext<Self>) -> View {
-        let profiles = self.state.config().profiles.into_iter().map(|profile| {
+        let config = self.state.config();
+        let selected = config
+            .profiles
+            .iter()
+            .position(|profile| Some(&profile.name) == self.selected.as_ref());
+        let profiles = config.profiles.into_iter().map(|profile| {
             let name = profile.name;
             KeyedView::new(
                 name.clone(),
-                Grid::new()
-                    .columns([GridLength::STAR, GridLength::Auto])
-                    .column_spacing(8.0)
-                    .children((
-                        Button::new()
-                            .horizontal_alignment(HorizontalAlignment::Stretch)
-                            .horizontal_content_alignment(HorizontalAlignment::Left)
-                            .on_click(context.message(Message::Edit(Some(name.clone()))))
-                            .content(name.clone()),
-                        Button::new()
-                            .grid_column(1)
-                            .is_enabled(!self.state.client.state().busy)
-                            .on_click(context.message(Message::Run(name)))
-                            .content(tr!("Run")),
-                    )),
+                ListViewItem::new().tag(name.clone()).content(
+                    Grid::new()
+                        .columns([GridLength::STAR, GridLength::Auto])
+                        .column_spacing(8.0)
+                        .children((
+                            Button::new()
+                                .style(ButtonStyle::Subtle)
+                                .horizontal_alignment(HorizontalAlignment::Stretch)
+                                .horizontal_content_alignment(HorizontalAlignment::Left)
+                                .on_click(context.message(Message::Edit(Some(name.clone()))))
+                                .content(name.clone()),
+                            Button::new()
+                                .grid_column(1)
+                                .is_enabled(!self.state.client.state().busy)
+                                .on_click(context.message(Message::Run(name)))
+                                .content(tr!("Run")),
+                        )),
+                ),
             )
         });
         ScrollViewer::new()
@@ -279,7 +313,13 @@ impl Main {
                             .text(tr!("Configurations"))
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
-                        StackPanel::new().spacing(8.0).keyed_children(profiles),
+                        ListView::new()
+                            .selected_index(selected)
+                            .can_drag_items(true)
+                            .can_reorder_items(true)
+                            .allow_drop(true)
+                            .on_reordered(context.callback(Message::Reorder))
+                            .items(profiles),
                         Button::new()
                             .on_click(context.message(Message::Edit(None)))
                             .content(tr!("New configuration")),

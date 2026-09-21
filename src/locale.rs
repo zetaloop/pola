@@ -314,6 +314,9 @@ macro_rules! zh {
     ("This configuration has been removed.") => {
         "此配置已被删除。"
     };
+    ("This action has been removed.") => {
+        "此动作已被删除。"
+    };
     ("The configuration editor has closed.") => {
         "配置编辑器已关闭。"
     };
@@ -340,6 +343,9 @@ macro_rules! zh {
     };
     ("Choose at least one day.") => {
         "请至少选择一天。"
+    };
+    ("Could not focus the input.") => {
+        "无法激活输入框。"
     };
     ("Could not focus the shortcut recorder.") => {
         "无法激活快捷键录入。"

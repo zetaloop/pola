@@ -17,7 +17,7 @@ use windows_reactor::*;
 use windows_window::Window;
 
 use crate::{
-    config::Config,
+    config::{Config, Profile},
     ipc::{Client, Request},
     locale::tr,
     mode::Mode,
@@ -183,6 +183,21 @@ impl AppState {
         }
         self.notify_window();
         Ok(())
+    }
+
+    fn save_profile(&self, name: Option<&str>, profile: Profile) -> Result<(), String> {
+        let mut config = self.config();
+        if let Some(name) = name {
+            let current = config
+                .profiles
+                .iter_mut()
+                .find(|profile| profile.name == name)
+                .ok_or(tr!("This configuration has been removed."))?;
+            *current = profile;
+        } else {
+            config.profiles.push(profile);
+        }
+        self.save_config(config, self.launch_at_login())
     }
 
     fn system_mode(&self) -> Result<Mode, String> {

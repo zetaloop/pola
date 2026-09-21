@@ -1,21 +1,40 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use crate::locale::tr;
 
 use windows_reactor::*;
 
+use super::AppState;
 use crate::{config::Action, mode::Mode};
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct Input {
+    pub state: Rc<AppState>,
+    pub name: String,
+    pub index: Option<usize>,
     pub action: Action,
     pub active: bool,
-    pub finished: Callback<Option<Action>>,
+    pub finished: Callback<()>,
+}
+
+impl PartialEq for Input {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.state, &other.state)
+            && self.name == other.name
+            && self.index == other.index
+            && self.action == other.action
+            && self.active == other.active
+    }
 }
 
 pub struct Editor {
+    state: Rc<AppState>,
+    name: String,
+    index: Option<usize>,
     draft: Action,
-    finished: Callback<Option<Action>>,
+    finished: Callback<()>,
+    field: ElementRef<TextBox>,
+    focus: Option<usize>,
     keys: Vec<usize>,
     next: usize,
     preview_failed: bool,
@@ -24,7 +43,9 @@ pub struct Editor {
 
 #[derive(Clone)]
 pub enum Message {
-    Kind(Option<usize>),
+    Choose,
+    Picked(Result<Option<PathBuf>, String>),
+    Focused(bool),
     Color(Option<usize>),
     Path(String),
     Drop(DroppedData),
@@ -48,6 +69,11 @@ impl Component for Editor {
             _ => 0,
         };
         Self {
+            state: Rc::clone(&input.state),
+            name: input.name.clone(),
+            index: input.index,
+            field: ElementRef::new(),
+            focus: None,
             draft: input.action.clone(),
             finished: input.finished.clone(),
             keys: (0..count).collect(),
@@ -57,16 +83,25 @@ impl Component for Editor {
         }
     }
 
-    fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
-        self.error.clear();
+    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+        if !matches!(message, Message::Focused(_) | Message::ImageFailed) {
+            self.error.clear();
+        }
         match message {
-            Message::Kind(Some(index)) => {
-                if let Some(action) = Action::choices().get(index)
-                    && std::mem::discriminant(action) != std::mem::discriminant(&self.draft)
-                {
-                    self.draft = action.clone();
-                    self.keys.clear();
-                    self.preview_failed = false;
+            Message::Choose => {
+                if !windows_pickers::OpenFilePicker::new().request(context, |result| {
+                    Message::Picked(result.map_err(|error| error.to_string()))
+                }) {
+                    self.error = tr!("Could not open the file picker.").into();
+                }
+            }
+            Message::Picked(Ok(Some(path))) => self.set_path(path.to_string_lossy().into_owned()),
+            Message::Picked(Ok(None)) => {}
+            Message::Picked(Err(error)) => self.error = error,
+            Message::Focused(success) => {
+                self.focus = None;
+                if !success {
+                    self.error = tr!("Could not focus the input.").into();
                 }
             }
             Message::Color(Some(index)) => {
@@ -74,7 +109,7 @@ impl Component for Editor {
                     mode: if index == 0 { Mode::Light } else { Mode::Dark },
                 };
             }
-            Message::Kind(None) | Message::Color(None) => {}
+            Message::Color(None) => {}
             Message::Path(value) => self.set_path(value),
             Message::Drop(data) => match dropped_file(data) {
                 Ok(path) => self.set_path(path.to_string_lossy().into_owned()),
@@ -90,6 +125,7 @@ impl Component for Editor {
                 if let Action::Command(command) = &mut self.draft {
                     command.args.push(String::new());
                     self.keys.push(self.next);
+                    self.focus = Some(self.next);
                     self.next += 1;
                 }
             }
@@ -99,6 +135,10 @@ impl Component for Editor {
                 {
                     command.args.remove(index);
                     self.keys.remove(index);
+                    self.focus = self
+                        .keys
+                        .get(index.min(self.keys.len().saturating_sub(1)))
+                        .copied();
                 }
             }
             Message::Argument(key, value) => {
@@ -108,14 +148,14 @@ impl Component for Editor {
                     command.args[index] = value;
                 }
             }
-            Message::Save => match self.draft.validate() {
+            Message::Save => match self.save() {
                 Ok(()) => {
-                    _ = self.finished.call(Some(self.draft.clone()));
+                    _ = self.finished.call(());
                 }
-                Err(error) => self.error = error.to_string(),
+                Err(error) => self.error = error,
             },
             Message::Cancel => {
-                _ = self.finished.call(None);
+                _ = self.finished.call(());
             }
             Message::ClearError => {}
         }
@@ -125,10 +165,19 @@ impl Component for Editor {
         if !input.active {
             return View::empty();
         }
-        let choices = Action::choices();
-        let selected = choices.iter().position(|action| {
-            std::mem::discriminant(action) == std::mem::discriminant(&self.draft)
-        });
+        if let Some(key) = self.focus {
+            let field = self.field.clone();
+            let completed = context.callback(Message::Focused);
+            context.use_effect("argument-focus", key, move || {
+                let result = completed.clone();
+                if !field.request_focus_result(move |value| {
+                    _ = result.call(matches!(value, Ok(true)));
+                }) {
+                    _ = completed.call(false);
+                }
+                None
+            });
+        }
         let fields: View = match &self.draft {
             Action::Color { mode } => RadioButtons::new()
                 .items_source([tr!("Light"), tr!("Dark")])
@@ -165,32 +214,37 @@ impl Component for Editor {
                 ))
             }
             Action::Command(command) => {
-                let arguments =
-                    command.args.iter().zip(&self.keys).enumerate().map(
-                        |(index, (value, &key))| {
-                            KeyedView::new(
-                                key.to_string(),
-                                Grid::new()
-                                    .columns([GridLength::STAR, GridLength::Auto])
-                                    .column_spacing(8.0)
-                                    .children((
-                                        TextBox::new()
-                                            .header(tr!("Argument {number}", number = index + 1))
-                                            .text(value.clone())
-                                            .accepts_return(true)
-                                            .text_wrapping(TextWrapping::Wrap)
-                                            .on_text_changed(context.callback(move |value| {
-                                                Message::Argument(key, value)
-                                            })),
-                                        Button::new()
-                                            .grid_column(1)
-                                            .vertical_alignment(VerticalAlignment::Bottom)
-                                            .on_click(context.message(Message::RemoveArgument(key)))
-                                            .content(tr!("Remove")),
-                                    )),
-                            )
-                        },
-                    );
+                let arguments = command.args.iter().zip(&self.keys).enumerate().map(
+                    |(index, (value, &key))| {
+                        let field = TextBox::new()
+                            .header(tr!("Argument {number}", number = index + 1))
+                            .text(value.clone())
+                            .accepts_return(true)
+                            .text_wrapping(TextWrapping::Wrap)
+                            .on_text_changed(
+                                context.callback(move |value| Message::Argument(key, value)),
+                            );
+                        let field = if self.focus == Some(key) {
+                            field.element_ref(&self.field)
+                        } else {
+                            field
+                        };
+                        KeyedView::new(
+                            key.to_string(),
+                            Grid::new()
+                                .columns([GridLength::STAR, GridLength::Auto])
+                                .column_spacing(8.0)
+                                .children((
+                                    field,
+                                    Button::new()
+                                        .grid_column(1)
+                                        .vertical_alignment(VerticalAlignment::Bottom)
+                                        .on_click(context.message(Message::RemoveArgument(key)))
+                                        .content(tr!("Remove")),
+                                )),
+                        )
+                    },
+                );
                 StackPanel::new().spacing(12.0).children((
                     self.file_input(tr!("Program"), &command.program, context),
                     StackPanel::new().spacing(8.0).keyed_children(arguments),
@@ -210,13 +264,9 @@ impl Component for Editor {
                 Border::new().padding(28.0).content(
                     StackPanel::new().spacing(20.0).children((
                         TextBlock::new()
-                            .text(tr!("Action"))
+                            .text(self.draft.title())
                             .font_size(28.0)
                             .font_weight(FontWeight::SEMI_BOLD),
-                        ComboBox::new()
-                            .items_source(choices.iter().map(Action::title))
-                            .selected_index(selected)
-                            .on_selection_changed(context.callback(Message::Kind)),
                         fields,
                         InfoBar::new()
                             .is_open(!self.error.is_empty())
@@ -242,6 +292,24 @@ impl Component for Editor {
 }
 
 impl Editor {
+    fn save(&self) -> Result<(), String> {
+        let mut profile = self
+            .state
+            .config()
+            .profile(&self.name)
+            .cloned()
+            .ok_or(tr!("This configuration has been removed."))?;
+        if let Some(index) = self.index {
+            *profile
+                .actions
+                .get_mut(index)
+                .ok_or(tr!("This action has been removed."))? = self.draft.clone();
+        } else {
+            profile.actions.push(self.draft.clone());
+        }
+        self.state.save_profile(Some(&self.name), profile)
+    }
+
     fn set_path(&mut self, value: String) {
         match &mut self.draft {
             Action::Wallpaper { path } | Action::Theme { path } => *path = value.into(),
@@ -258,11 +326,21 @@ impl Editor {
             ))
             .on_drop(context.callback(Message::Drop))
             .content(
-                TextBox::new()
-                    .header(title)
-                    .text(value)
-                    .placeholder_text(tr!("Drop a file or enter its path"))
-                    .on_text_changed(context.callback(Message::Path)),
+                Grid::new()
+                    .columns([GridLength::STAR, GridLength::Auto])
+                    .column_spacing(8.0)
+                    .children((
+                        TextBox::new()
+                            .header(title)
+                            .text(value)
+                            .placeholder_text(tr!("Drop a file or enter its path"))
+                            .on_text_changed(context.callback(Message::Path)),
+                        Button::new()
+                            .grid_column(1)
+                            .vertical_alignment(VerticalAlignment::Bottom)
+                            .on_click(context.message(Message::Choose))
+                            .content(tr!("Choose…")),
+                    )),
             )
     }
 }
