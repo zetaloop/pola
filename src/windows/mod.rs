@@ -24,6 +24,7 @@ use crate::{
 };
 
 mod action;
+mod appearance;
 pub(crate) mod daemon;
 pub(crate) mod locale;
 mod profile;

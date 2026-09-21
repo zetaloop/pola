@@ -14,11 +14,14 @@ use crate::{
 pub(crate) struct SettingsInput {
     pub state: Rc<AppState>,
     pub config: Config,
+    pub active: bool,
 }
 
 impl PartialEq for SettingsInput {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.state, &other.state) && self.config == other.config
+        Rc::ptr_eq(&self.state, &other.state)
+            && self.config == other.config
+            && self.active == other.active
     }
 }
 
@@ -54,6 +57,12 @@ impl Component for Settings {
             recording: false,
             pending: None,
             error: String::new(),
+        }
+    }
+
+    fn input_changed(&mut self, input: &Self::Input, _context: &ComponentContext<Self>) {
+        if !input.active {
+            self.finish();
         }
     }
 
@@ -131,6 +140,9 @@ impl Component for Settings {
     }
 
     fn view(&self, input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        if !input.active {
+            return View::empty();
+        }
         if self.recording {
             let recorder = self.recorder.clone();
             let failed = context.message(Message::FocusFailed);

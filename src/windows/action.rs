@@ -9,6 +9,7 @@ use crate::{config::Action, mode::Mode};
 #[derive(Clone, PartialEq)]
 pub struct Input {
     pub action: Action,
+    pub active: bool,
     pub finished: Callback<Option<Action>>,
 }
 
@@ -120,7 +121,10 @@ impl Component for Editor {
         }
     }
 
-    fn view(&self, _input: &Input, context: &mut ViewContext<Self>) -> View {
+    fn view(&self, input: &Input, context: &mut ViewContext<Self>) -> View {
+        if !input.active {
+            return View::empty();
+        }
         let choices = Action::choices();
         let selected = choices.iter().position(|action| {
             std::mem::discriminant(action) == std::mem::discriminant(&self.draft)

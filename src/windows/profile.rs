@@ -15,6 +15,8 @@ pub(crate) struct ProfileInput {
     pub state: Rc<AppState>,
     pub name: Option<String>,
     pub profile: Profile,
+    pub active: bool,
+    pub opened: Callback<Callback<()>>,
     pub finished: Callback<()>,
 }
 
@@ -23,6 +25,7 @@ impl PartialEq for ProfileInput {
         Rc::ptr_eq(&self.state, &other.state)
             && self.name == other.name
             && self.profile == other.profile
+            && self.active == other.active
     }
 }
 
@@ -50,6 +53,7 @@ pub(crate) enum Message {
     Delete,
     Save,
     Cancel,
+    Back,
     ClearError,
 }
 
@@ -57,7 +61,8 @@ impl Component for Editor {
     type Input = ProfileInput;
     type Message = Message;
 
-    fn create(input: &ProfileInput, _context: &ComponentContext<Self>) -> Self {
+    fn create(input: &ProfileInput, context: &ComponentContext<Self>) -> Self {
+        _ = input.opened.call(context.sender().message(Message::Back));
         let count = input.profile.actions.len();
         Self {
             state: Rc::clone(&input.state),
@@ -165,16 +170,25 @@ impl Component for Editor {
             Message::Cancel => {
                 _ = self.finished.call(());
             }
+            Message::Back => {
+                if self.editing.take().is_none() {
+                    _ = self.finished.call(());
+                }
+            }
             Message::ClearError => {}
         }
     }
 
-    fn view(&self, _input: &ProfileInput, context: &mut ViewContext<Self>) -> View {
+    fn view(&self, input: &ProfileInput, context: &mut ViewContext<Self>) -> View {
         if let Some((_, action)) = &self.editing {
             return View::component::<action::Editor>(action::Input {
                 action: action.clone(),
+                active: input.active,
                 finished: context.callback(Message::Edited),
             });
+        }
+        if !input.active {
+            return View::empty();
         }
         let actions = self
             .draft

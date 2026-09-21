@@ -5,7 +5,7 @@ use crate::locale::tr;
 use windows_reactor::*;
 
 use super::{
-    AppState,
+    AppState, appearance,
     profile::{Editor, ProfileInput},
     schedule::{Editor as ScheduleEditor, ScheduleInput},
     settings::{Settings, SettingsInput},
@@ -27,22 +27,19 @@ pub(crate) enum Event {
     Changed,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Page {
     Appearance,
     Profiles,
     Schedule,
     Settings,
-    Profile {
-        name: Option<String>,
-        profile: Profile,
-    },
 }
 
 pub(crate) struct Main {
     state: Rc<AppState>,
     page: Page,
-    pane_open: bool,
+    editing: Option<(Option<String>, Profile)>,
+    back: Option<Callback<()>>,
     mode: Result<Mode, String>,
     status: String,
 }
@@ -54,10 +51,9 @@ pub(crate) enum Message {
     Edit(Option<String>),
     Run(String),
     Back,
-    Pane(bool),
-    TogglePane,
+    BindBack(Callback<()>),
+    Finished,
     Mode(Option<usize>),
-    Exit,
     ClearError,
 }
 
@@ -72,7 +68,8 @@ impl Component for Main {
         Self {
             state: Rc::clone(&input.0),
             page: Page::Appearance,
-            pane_open: true,
+            editing: None,
+            back: None,
             mode: input.0.system_mode(),
             status: String::new(),
         }
@@ -107,21 +104,27 @@ impl Component for Main {
                     },
                     None => Profile::default(),
                 };
-                self.page = Page::Profile { name, profile };
+                self.editing = Some((name, profile));
             }
             Message::Run(name) => {
                 self.status = self.state.run_profile(&name).err().unwrap_or_default();
             }
-            Message::Back => self.page = Page::Profiles,
-            Message::Pane(value) => self.pane_open = value,
-            Message::TogglePane => self.pane_open = !self.pane_open,
+            Message::Back => {
+                if let Some(back) = &self.back {
+                    _ = back.call(());
+                }
+            }
+            Message::BindBack(back) => self.back = Some(back),
+            Message::Finished => {
+                self.editing = None;
+                self.back = None;
+            }
             Message::Mode(Some(index)) => {
                 self.state
                     .select(if index == 1 { Mode::Dark } else { Mode::Light });
                 self.mode = self.state.system_mode();
             }
             Message::Mode(None) => {}
-            Message::Exit => self.state.exit(),
             Message::ClearError => self.status.clear(),
         }
     }
@@ -131,32 +134,54 @@ impl Component for Main {
         context.window_visuals(
             WindowVisuals::new()
                 .backdrop(WindowBackdrop::Mica)
-                .client_size(960.0, 640.0)
+                .client_size(680.0, 480.0)
                 .constraints(WindowConstraints {
-                    min_width: Some(640.0),
-                    min_height: Some(480.0),
+                    min_width: Some(420.0),
+                    min_height: Some(360.0),
                     ..Default::default()
                 }),
         );
         let config = self.state.config();
-        let content = match &self.page {
-            Page::Appearance => self.appearance(context),
-            Page::Profiles => self.profiles(context),
-            Page::Profile { name, profile } => View::component::<Editor>(ProfileInput {
+        let editor = self
+            .editing
+            .as_ref()
+            .map_or_else(View::empty, |(name, profile)| {
+                View::component::<Editor>(ProfileInput {
+                    state: Rc::clone(&self.state),
+                    name: name.clone(),
+                    profile: profile.clone(),
+                    active: self.page == Page::Profiles,
+                    opened: context.callback(Message::BindBack),
+                    finished: context.message(Message::Finished),
+                })
+            });
+        let content = Grid::new().children((
+            if self.page == Page::Appearance {
+                appearance::view(
+                    &self.mode,
+                    self.state.client.state().next.as_ref(),
+                    context.callback(Message::Mode),
+                )
+            } else {
+                View::empty()
+            },
+            if self.page == Page::Profiles && self.editing.is_none() {
+                self.profiles(context)
+            } else {
+                View::empty()
+            },
+            editor,
+            View::component::<ScheduleEditor>(ScheduleInput {
                 state: Rc::clone(&self.state),
-                name: name.clone(),
-                profile: profile.clone(),
-                finished: context.message(Message::Back),
+                schedule: config.schedule.clone(),
+                active: self.page == Page::Schedule,
             }),
-            Page::Schedule => View::component::<ScheduleEditor>(ScheduleInput {
-                state: Rc::clone(&self.state),
-                schedule: config.schedule,
-            }),
-            Page::Settings => View::component::<Settings>(SettingsInput {
+            View::component::<Settings>(SettingsInput {
                 state: Rc::clone(&self.state),
                 config,
+                active: self.page == Page::Settings,
             }),
-        };
+        ));
         let error = self.mode.as_ref().err().unwrap_or(&self.status);
         let body = Grid::new()
             .rows([GridLength::Auto, GridLength::STAR])
@@ -171,13 +196,9 @@ impl Component for Main {
         let appearance_selected = self.page == Page::Appearance;
         let navigation = NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Auto)
-            .is_pane_open(self.pane_open)
-            .on_is_pane_open_changed(context.callback(Message::Pane))
-            .is_pane_toggle_button_visible(false)
             .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
             .is_settings_visible(false)
             .always_show_header(false)
-            .open_pane_length(220.0)
             .on_selected_tag_changed(context.callback(Message::Navigate))
             .menu_items([
                 (
@@ -192,7 +213,7 @@ impl Component for Main {
                     "profiles",
                     NavigationViewItem::new()
                         .tag("profiles")
-                        .is_selected(matches!(self.page, Page::Profiles | Page::Profile { .. }))
+                        .is_selected(self.page == Page::Profiles)
                         .icon(SymbolIcon::new().symbol(Symbol::List))
                         .content(tr!("Configurations")),
                 ),
@@ -213,22 +234,13 @@ impl Component for Main {
                     .icon(SymbolIcon::new().symbol(Symbol::Setting))
                     .content(tr!("Settings")),
             )])
-            .pane_footer(
-                Button::new()
-                    .margin(Thickness::uniform(12.0))
-                    .on_click(context.message(Message::Exit))
-                    .content(tr!("Quit pola")),
-            )
             .content(body)
             .grid_row(1);
         let title = TitleBar::new()
             .title("pola")
-            .preferred_height(WindowTitleBarHeight::Tall)
-            .is_back_button_visible(matches!(self.page, Page::Profile { .. }))
-            .is_back_button_enabled(true)
-            .on_back_requested(context.message(Message::Back))
-            .is_pane_toggle_button_visible(true)
-            .on_pane_toggle_requested(context.message(Message::TogglePane));
+            .is_back_button_visible(self.page == Page::Profiles && self.editing.is_some())
+            .is_back_button_enabled(self.back.is_some())
+            .on_back_requested(context.message(Message::Back));
         Grid::new()
             .rows([GridLength::Auto, GridLength::STAR])
             .children((title, navigation))
@@ -271,41 +283,6 @@ impl Main {
                         Button::new()
                             .on_click(context.message(Message::Edit(None)))
                             .content(tr!("New configuration")),
-                    )),
-                ),
-            )
-    }
-
-    fn appearance(&self, context: &mut ViewContext<Self>) -> View {
-        let next = self
-            .state
-            .client
-            .state()
-            .next
-            .map(|event| crate::locale::next(&event).unwrap_or_else(|error| error))
-            .unwrap_or_default();
-        ScrollViewer::new()
-            .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-            .content(
-                Border::new().padding(28.0).content(
-                    StackPanel::new().spacing(24.0).children((
-                        TextBlock::new()
-                            .text(tr!("Appearance"))
-                            .font_size(28.0)
-                            .font_weight(FontWeight::SEMI_BOLD),
-                        RadioButtons::new()
-                            .items_source([tr!("Light"), tr!("Dark")])
-                            .max_columns(2)
-                            .selected_index(
-                                self.mode
-                                    .as_ref()
-                                    .ok()
-                                    .map(|mode| usize::from(*mode == Mode::Dark)),
-                            )
-                            .on_selection_changed(context.callback(Message::Mode)),
-                        TextBlock::new()
-                            .text(next)
-                            .text_wrapping(TextWrapping::Wrap),
                     )),
                 ),
             )

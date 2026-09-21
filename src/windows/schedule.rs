@@ -15,11 +15,14 @@ use crate::{
 pub(crate) struct ScheduleInput {
     pub state: Rc<AppState>,
     pub schedule: Schedule,
+    pub active: bool,
 }
 
 impl PartialEq for ScheduleInput {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.state, &other.state) && self.schedule == other.schedule
+        Rc::ptr_eq(&self.state, &other.state)
+            && self.schedule == other.schedule
+            && self.active == other.active
     }
 }
 
@@ -193,7 +196,10 @@ impl Component for Editor {
         }
     }
 
-    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+    fn view(&self, input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        if !input.active {
+            return View::empty();
+        }
         let rules = self.schedule.rules.iter().enumerate().map(|(index, rule)| {
             let caption = crate::locale::days(&rule.days)
                 .and_then(|days| {
