@@ -5,6 +5,7 @@ use windows_reactor::*;
 
 use super::{
     AppState,
+    profile::{Editor, ProfileInput},
     settings::{Section, Settings, SettingsInput},
 };
 use crate::mode::Mode;
@@ -115,12 +116,16 @@ impl Component for Main {
         let config = self.state.config();
         let content = match self.page {
             Page::Appearance => self.appearance(context),
+            Page::Profile(mode) => View::component::<Editor>(ProfileInput {
+                state: Rc::clone(&self.state),
+                mode,
+                profile: config.profile(mode).clone(),
+            }),
             page => View::component::<Settings>(SettingsInput {
                 state: Rc::clone(&self.state),
                 config: config.clone(),
                 section: match page {
                     Page::Schedule => Section::Schedule,
-                    Page::Profile(mode) => Section::Profile(mode),
                     _ => Section::General,
                 },
             }),
@@ -235,9 +240,12 @@ impl Main {
                 };
                 if !profile.commands.is_empty() {
                     if !description.is_empty() {
-                        description.push_str(" · ");
+                        description.push('\n');
                     }
-                    description.push_str(&format!("{} commands", profile.commands.len()));
+                    description.push_str(&match profile.commands.len() {
+                        1 => "1 command".into(),
+                        count => format!("{count} commands"),
+                    });
                 }
                 KeyedView::new(
                     mode.to_string(),
@@ -266,7 +274,13 @@ impl Main {
         let next = config
             .schedule
             .next(&Zoned::now())
-            .map(|event| format!("Next · {} · {}", event.at.strftime("%a %H:%M"), event.mode))
+            .map(|event| {
+                format!(
+                    "Switch to {} at {}",
+                    event.mode,
+                    event.at.strftime("%a %H:%M")
+                )
+            })
             .unwrap_or_else(|| {
                 if config.schedule.enabled {
                     "Add an arrangement to enable automatic switching.".into()

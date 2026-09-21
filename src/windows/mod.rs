@@ -40,6 +40,7 @@ use crate::{
     shortcut::Shortcut,
 };
 
+mod profile;
 mod settings;
 mod window;
 

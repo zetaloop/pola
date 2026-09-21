@@ -169,7 +169,11 @@ impl Window {
         self.next
             .setStringValue(&NSString::from_str(&if config.schedule.enabled {
                 next.map(|event| {
-                    format!("Next · {} · {}", event.at.strftime("%a %H:%M"), event.mode)
+                    format!(
+                        "Switch to {} at {}",
+                        event.mode,
+                        event.at.strftime("%a %H:%M")
+                    )
                 })
                 .unwrap_or_else(|| "Add an arrangement to enable automatic switching.".into())
             } else {
@@ -191,7 +195,7 @@ impl Window {
             let title = if index == 0 { "Light" } else { "Dark" };
             let selected = (index == 0) == (mode == Mode::Light);
             self.previews[index].setTitle(&NSString::from_str(&if selected {
-                format!("{title} · Active")
+                format!("{title} (active)")
             } else {
                 title.into()
             }));

@@ -1,11 +1,10 @@
-use std::{path::PathBuf, rc::Rc, str::FromStr};
+use std::{rc::Rc, str::FromStr};
 
 use jiff::civil::Time;
-use windows_pickers::OpenFilePicker;
 use windows_reactor::*;
 
 use crate::{
-    config::{Command, Config, Profile},
+    config::Config,
     mode::Mode,
     schedule::{Rule, Schedule, Weekday},
 };
@@ -28,7 +27,6 @@ const DAY_NAMES: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
 pub(crate) enum Section {
     General,
     Schedule,
-    Profile(Mode),
 }
 
 #[derive(Clone)]
@@ -52,19 +50,12 @@ struct Draft {
     apply_on_launch: bool,
     shortcut: String,
     rules: Vec<RuleDraft>,
-    light: ProfileDraft,
-    dark: ProfileDraft,
 }
 
 struct RuleDraft {
     days: [bool; 7],
     time: String,
     mode: Mode,
-}
-
-struct ProfileDraft {
-    wallpaper: String,
-    commands: Vec<Command>,
 }
 
 impl Draft {
@@ -84,12 +75,10 @@ impl Draft {
                     mode: rule.mode,
                 })
                 .collect(),
-            light: ProfileDraft::from_profile(config.light),
-            dark: ProfileDraft::from_profile(config.dark),
         }
     }
 
-    fn config(&self) -> Result<Config, String> {
+    fn config(&self, mut config: Config) -> Result<Config, String> {
         let rules = self
             .rules
             .iter()
@@ -102,7 +91,6 @@ impl Draft {
                 if days.is_empty() {
                     return Err("Each schedule rule needs at least one day.".into());
                 }
-
                 let time = Time::from_str(&rule.time)
                     .map_err(|error| format!("Invalid time '{}': {error}", rule.time))?;
                 Ok(Rule {
@@ -112,55 +100,13 @@ impl Draft {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-
-        Ok(Config {
-            shortcut: self.shortcut.clone(),
-            schedule: Schedule {
-                enabled: self.schedule_enabled,
-                apply_on_launch: self.apply_on_launch,
-                rules,
-            },
-            light: self.light.profile(),
-            dark: self.dark.profile(),
-        })
-    }
-
-    fn profile(&self, mode: Mode) -> &ProfileDraft {
-        match mode {
-            Mode::Light => &self.light,
-            Mode::Dark => &self.dark,
-        }
-    }
-
-    fn profile_mut(&mut self, mode: Mode) -> &mut ProfileDraft {
-        match mode {
-            Mode::Light => &mut self.light,
-            Mode::Dark => &mut self.dark,
-        }
-    }
-}
-
-impl ProfileDraft {
-    fn from_profile(profile: Profile) -> Self {
-        Self {
-            wallpaper: profile
-                .wallpaper
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            commands: profile.commands,
-        }
-    }
-
-    fn profile(&self) -> Profile {
-        Profile {
-            wallpaper: (!self.wallpaper.is_empty()).then(|| PathBuf::from(&self.wallpaper)),
-            commands: self
-                .commands
-                .iter()
-                .filter(|command| !command.program.is_empty())
-                .cloned()
-                .collect(),
-        }
+        config.shortcut = self.shortcut.clone();
+        config.schedule = Schedule {
+            enabled: self.schedule_enabled,
+            apply_on_launch: self.apply_on_launch,
+            rules,
+        };
+        Ok(config)
     }
 }
 
@@ -182,15 +128,6 @@ pub(crate) enum Message {
     RuleDay(usize, usize, bool),
     RuleTime(usize, String),
     RuleMode(usize, Option<usize>),
-    Wallpaper(Mode, String),
-    PickWallpaper(Mode),
-    WallpaperPicked(Mode, Result<Option<PathBuf>, String>),
-    AddCommand(Mode),
-    RemoveCommand(Mode, usize),
-    Program(Mode, usize, String),
-    AddArgument(Mode, usize),
-    RemoveArgument(Mode, usize, usize),
-    Argument(Mode, usize, usize, String),
     Save,
 }
 
@@ -214,11 +151,8 @@ impl Component for Settings {
         }
     }
 
-    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
-        if !matches!(&message, Message::Save) {
-            self.status.clear();
-        }
-
+    fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
+        self.status.clear();
         match message {
             Message::LaunchAtLogin(value) => self.draft.launch_at_login = value,
             Message::ScheduleEnabled(value) => self.draft.schedule_enabled = value,
@@ -255,64 +189,9 @@ impl Component for Settings {
                     };
                 }
             }
-            Message::Wallpaper(mode, value) => self.draft.profile_mut(mode).wallpaper = value,
-            Message::PickWallpaper(mode) => {
-                let requested = OpenFilePicker::new()
-                    .title("Choose wallpaper")
-                    .filter_extensions("Images", ["png", "jpg", "jpeg", "webp", "bmp"])
-                    .filter_all()
-                    .request(context, move |result| {
-                        Message::WallpaperPicked(mode, result.map_err(|error| error.to_string()))
-                    });
-                if !requested {
-                    self.status = "Another file picker is already open.".into();
-                }
-            }
-            Message::WallpaperPicked(mode, Ok(Some(path))) => {
-                self.draft.profile_mut(mode).wallpaper = path.to_string_lossy().into_owned();
-                self.status.clear();
-            }
-            Message::WallpaperPicked(_, Ok(None)) => {}
-            Message::WallpaperPicked(_, Err(error)) => self.status = error,
-            Message::AddCommand(mode) => {
-                self.draft.profile_mut(mode).commands.push(Command {
-                    program: String::new(),
-                    args: Vec::new(),
-                });
-            }
-            Message::RemoveCommand(mode, index) => {
-                let commands = &mut self.draft.profile_mut(mode).commands;
-                if index < commands.len() {
-                    commands.remove(index);
-                }
-            }
-            Message::Program(mode, index, value) => {
-                if let Some(command) = self.draft.profile_mut(mode).commands.get_mut(index) {
-                    command.program = value;
-                }
-            }
-            Message::AddArgument(mode, command) => {
-                if let Some(command) = self.draft.profile_mut(mode).commands.get_mut(command) {
-                    command.args.push(String::new());
-                }
-            }
-            Message::RemoveArgument(mode, command, argument) => {
-                if let Some(command) = self.draft.profile_mut(mode).commands.get_mut(command)
-                    && argument < command.args.len()
-                {
-                    command.args.remove(argument);
-                }
-            }
-            Message::Argument(mode, command, argument, value) => {
-                if let Some(command) = self.draft.profile_mut(mode).commands.get_mut(command)
-                    && let Some(argument) = command.args.get_mut(argument)
-                {
-                    *argument = value;
-                }
-            }
             Message::Save => match self
                 .draft
-                .config()
+                .config(self.state.config())
                 .and_then(|config| self.state.save_config(config, self.draft.launch_at_login))
             {
                 Ok(()) => self.status = "Saved".into(),
@@ -325,7 +204,6 @@ impl Component for Settings {
         let content = match input.section {
             Section::General => self.general_view(context),
             Section::Schedule => self.schedule_view(context),
-            Section::Profile(mode) => self.profile_view(context, mode),
         };
         Grid::new()
             .rows([GridLength::STAR, GridLength::Auto])
@@ -376,17 +254,16 @@ impl Settings {
                 .orientation(Orientation::Horizontal)
                 .spacing(4.0)
                 .keyed_children((0..7).map(|day| {
-                    let callback =
-                        context.callback(move |value| Message::RuleDay(index, day, value));
                     KeyedView::new(
                         format!("day-{index}-{day}"),
                         CheckBox::new()
                             .is_checked(rule.days[day])
-                            .on_is_checked_changed(callback)
+                            .on_is_checked_changed(
+                                context.callback(move |value| Message::RuleDay(index, day, value)),
+                            )
                             .content(DAY_NAMES[day]),
                     )
                 }));
-
             KeyedView::new(
                 format!("rule-{index}"),
                 Border::new().padding(Thickness::uniform(8.0)).content(
@@ -416,106 +293,12 @@ impl Settings {
                 ),
             )
         });
-
         let content = StackPanel::new().spacing(8.0).children((
             StackPanel::new().keyed_children(rows),
             Button::new()
                 .on_click(context.message(Message::AddRule))
                 .content("Add schedule"),
         ));
-
-        ScrollViewer::new()
-            .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
-            .content(
-                Border::new()
-                    .padding(Thickness::uniform(12.0))
-                    .content(content),
-            )
-    }
-
-    fn profile_view(&self, context: &mut ViewContext<Self>, mode: Mode) -> View {
-        let profile = self.draft.profile(mode);
-        let commands = profile.commands.iter().enumerate().map(|(index, command)| {
-            let arguments = command
-                .args
-                .iter()
-                .enumerate()
-                .map(|(argument_index, argument)| {
-                    KeyedView::new(
-                        format!("arg-{index}-{argument_index}"),
-                        StackPanel::new()
-                            .orientation(Orientation::Horizontal)
-                            .spacing(8.0)
-                            .children((
-                                TextBox::new()
-                                    .width(430.0)
-                                    .text(argument.clone())
-                                    .placeholder_text("Argument")
-                                    .on_text_changed(context.callback(move |value| {
-                                        Message::Argument(mode, index, argument_index, value)
-                                    })),
-                                Button::new()
-                                    .on_click(context.message(Message::RemoveArgument(
-                                        mode,
-                                        index,
-                                        argument_index,
-                                    )))
-                                    .content("Remove"),
-                            )),
-                    )
-                });
-
-            KeyedView::new(
-                format!("command-{index}"),
-                Border::new().padding(Thickness::uniform(8.0)).content(
-                    StackPanel::new().spacing(8.0).children((
-                        StackPanel::new()
-                            .orientation(Orientation::Horizontal)
-                            .spacing(8.0)
-                            .children((
-                                TextBox::new()
-                                    .width(430.0)
-                                    .text(command.program.clone())
-                                    .placeholder_text("Program")
-                                    .on_text_changed(context.callback(move |value| {
-                                        Message::Program(mode, index, value)
-                                    })),
-                                Button::new()
-                                    .on_click(context.message(Message::RemoveCommand(mode, index)))
-                                    .content("Remove"),
-                            )),
-                        StackPanel::new().spacing(6.0).keyed_children(arguments),
-                        Button::new()
-                            .on_click(context.message(Message::AddArgument(mode, index)))
-                            .content("Add argument"),
-                    )),
-                ),
-            )
-        });
-
-        let content = StackPanel::new().spacing(12.0).children((
-            TextBlock::new().text("Wallpaper"),
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(8.0)
-                .children((
-                    TextBox::new()
-                        .width(500.0)
-                        .text(profile.wallpaper.clone())
-                        .on_text_changed(
-                            context.callback(move |value| Message::Wallpaper(mode, value)),
-                        ),
-                    Button::new()
-                        .on_click(context.message(Message::PickWallpaper(mode)))
-                        .content("Choose…"),
-                )),
-            TextBlock::new().text("Commands"),
-            StackPanel::new().spacing(8.0).keyed_children(commands),
-            Button::new()
-                .on_click(context.message(Message::AddCommand(mode)))
-                .content("Add command"),
-        ));
-
         ScrollViewer::new()
             .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
             .content(
