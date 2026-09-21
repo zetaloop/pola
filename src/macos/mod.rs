@@ -1,32 +1,20 @@
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    ffi::c_void,
-    ptr,
-};
+use std::cell::{OnceCell, RefCell};
 
-use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
-use jiff::Zoned;
+use dispatch2::DispatchQueue;
 use objc2::{
-    AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send,
-    rc::Retained,
-    runtime::{AnyObject, ProtocolObject},
+    DefinedClass, MainThreadOnly, define_class, msg_send, rc::Retained, runtime::ProtocolObject,
     sel,
 };
 use objc2_app_kit::*;
-use objc2_foundation::{
-    NSArray, NSData, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions, NSNotification,
-    NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol,
-    NSSize, NSString, NSSystemClockDidChangeNotification, NSSystemTimeZoneDidChangeNotification,
-    NSTimer, ns_string,
-};
-use objc2_service_management::{SMAppService, SMAppServiceStatus};
+use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
 
 use crate::{
     config::{Config, Profile},
+    ipc::{Client, Request},
     mode::Mode,
-    runtime::Runtime,
 };
 
+pub(crate) mod daemon;
 mod file;
 mod profile;
 mod schedule;
@@ -36,13 +24,14 @@ pub(crate) mod system;
 mod ui;
 mod window;
 
+thread_local! {
+    static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
+}
+
 struct DelegateIvars {
-    runtime: Runtime,
-    timer: RefCell<Option<Retained<NSTimer>>>,
-    status_item: OnceCell<Retained<NSStatusItem>>,
+    client: Client,
     settings: OnceCell<Retained<settings::Settings>>,
     window: OnceCell<window::Window>,
-    appearance_observed: Cell<bool>,
 }
 
 define_class!(
@@ -56,12 +45,18 @@ define_class!(
     unsafe impl NSApplicationDelegate for Delegate {
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
-            self.start();
+            self.build_menu();
+            self.open_window();
         }
 
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
             self.open_window();
+            true
+        }
+
+        #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
+        fn terminate_after_close(&self, _app: &NSApplication) -> bool {
             true
         }
     }
@@ -200,37 +195,6 @@ define_class!(
             self.open_settings();
         }
 
-        #[unsafe(method(scheduleFired:))]
-        fn schedule_fired(&self, _timer: &NSTimer) {
-            let now = Zoned::now();
-            if let Some(mode) = self.config().schedule.current(&now) {
-                self.select(mode);
-            }
-            self.schedule_next();
-        }
-
-        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
-        fn appearance_changed(
-            &self,
-            _key_path: Option<&NSString>,
-            _object: Option<&AnyObject>,
-            _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
-            _context: *mut c_void,
-        ) {
-            self.apply(self.system_mode());
-            self.update_window();
-        }
-
-        #[unsafe(method(clockChanged:))]
-        fn clock_changed(&self, _notification: &NSNotification) {
-            self.resume_schedule();
-        }
-
-        #[unsafe(method(didWake:))]
-        fn did_wake(&self, _notification: &NSNotification) {
-            self.resume_schedule();
-        }
-
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: &NSObject) {
             NSApplication::sharedApplication(self.mtm()).terminate(None);
@@ -238,122 +202,18 @@ define_class!(
     }
 );
 
-impl Drop for Delegate {
-    fn drop(&mut self) {
-        if self.ivars().appearance_observed.get() {
-            unsafe {
-                NSApplication::sharedApplication(self.mtm())
-                    .removeObserver_forKeyPath(self, ns_string!("effectiveAppearance"));
-            }
-        }
-    }
-}
-
 impl Delegate {
-    fn new(mtm: objc2_foundation::MainThreadMarker, config: Config) -> Retained<Self> {
+    fn new(mtm: objc2_foundation::MainThreadMarker, client: Client) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
-            runtime: Runtime::new(config),
-            timer: RefCell::new(None),
-            status_item: OnceCell::new(),
+            client,
             settings: OnceCell::new(),
             window: OnceCell::new(),
-            appearance_observed: Cell::new(false),
         });
         unsafe { msg_send![super(this), init] }
     }
 
-    fn start(&self) {
-        let app = NSApplication::sharedApplication(self.mtm());
-        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-
-        self.build_menu();
-        self.observe_system();
-
-        let shortcut = self.config().shortcut;
-        if let Err(error) = self.register_hotkey(&shortcut) {
-            show_error(
-                self.mtm(),
-                "Could not register shortcut",
-                &error.to_string(),
-            );
-        }
-
-        let mode = {
-            let config = self.config();
-            if config.schedule.enabled && config.schedule.apply_on_launch {
-                config.schedule.current(&Zoned::now())
-            } else {
-                None
-            }
-        };
-
-        match mode {
-            Some(mode) => self.select(mode),
-            None => self.apply(self.system_mode()),
-        }
-        self.schedule_next();
-        self.update_window();
-    }
-
-    fn observe_system(&self) {
-        let app = NSApplication::sharedApplication(self.mtm());
-        unsafe {
-            app.addObserver_forKeyPath_options_context(
-                self,
-                ns_string!("effectiveAppearance"),
-                NSKeyValueObservingOptions::New,
-                ptr::null_mut(),
-            );
-        }
-        self.ivars().appearance_observed.set(true);
-
-        let center = NSNotificationCenter::defaultCenter();
-        unsafe {
-            center.addObserver_selector_name_object(
-                self,
-                sel!(clockChanged:),
-                Some(NSSystemClockDidChangeNotification),
-                None,
-            );
-            center.addObserver_selector_name_object(
-                self,
-                sel!(clockChanged:),
-                Some(NSSystemTimeZoneDidChangeNotification),
-                None,
-            );
-        }
-
-        let workspace = NSWorkspace::sharedWorkspace();
-        unsafe {
-            workspace
-                .notificationCenter()
-                .addObserver_selector_name_object(
-                    self,
-                    sel!(didWake:),
-                    Some(NSWorkspaceDidWakeNotification),
-                    None,
-                );
-        }
-    }
-
     fn build_menu(&self) {
         let mtm = self.mtm();
-        let status_item = NSStatusBar::systemStatusBar().statusItemWithLength(-2.0);
-        if let Some(button) = status_item.button(mtm) {
-            let data = NSData::with_bytes(include_bytes!("../../assets/pola-symbol.png"));
-            let image =
-                NSImage::initWithData(NSImage::alloc(), &data).expect("invalid status image");
-            image.setSize(NSSize::new(18.0, 18.0));
-            image.setTemplate(true);
-            button.setImage(Some(&image));
-            button.setToolTip(Some(ns_string!("pola")));
-            unsafe {
-                button.setTarget(Some(self));
-                button.setAction(Some(sel!(showWindow:)));
-            }
-        }
-        self.ivars().status_item.set(status_item).unwrap();
-
         let menu = NSMenu::new(mtm);
         let application = NSMenu::new(mtm);
         for (title, action, key) in [
@@ -416,8 +276,12 @@ impl Delegate {
 
     fn update_window(&self) {
         if let Some(window) = self.ivars().window.get() {
-            let next = self.ivars().runtime.next.borrow().clone();
-            window.update(&self.config(), self.system_mode(), next.as_ref());
+            let state = self.ivars().client.state();
+            window.update(
+                &state.config,
+                state.mode.expect("AppKit appearance is available"),
+                state.next.as_ref(),
+            );
         }
         if let Some(settings) = self.ivars().settings.get() {
             settings.update();
@@ -425,38 +289,28 @@ impl Delegate {
     }
 
     fn config(&self) -> Config {
-        self.ivars().runtime.config.borrow().clone()
+        self.ivars().client.state().config
     }
 
     fn save_config(&self, config: Config) -> Result<(), String> {
-        self.ivars().runtime.save(config)?;
-        self.schedule_next();
+        self.ivars().client.request(Request::Save(config))?;
+        self.update_window();
         Ok(())
     }
 
     fn system_mode(&self) -> Mode {
-        system::mode(self.mtm())
-    }
-
-    fn toggle(&self) {
-        self.select(self.system_mode().toggle());
-        self.schedule_next();
+        self.ivars()
+            .client
+            .state()
+            .mode
+            .expect("AppKit appearance is available")
     }
 
     fn select(&self, mode: Mode) {
-        if self.system_mode() != mode
-            && let Err(error) = system::set_mode(mode)
-        {
-            show_error(self.mtm(), "Could not change appearance", &error);
-            return;
+        if let Err(error) = self.ivars().client.request(Request::Select(mode)) {
+            show_error("Could not change appearance", &error);
         }
-        self.apply(mode);
-    }
-
-    fn apply(&self, mode: Mode) {
-        if let Err(error) = self.ivars().runtime.apply(mode) {
-            show_error(self.mtm(), "Could not apply appearance", &error);
-        }
+        self.update_window();
     }
 
     fn save_profile(&self, mode: Mode, profile: Profile) -> Result<(), String> {
@@ -471,52 +325,16 @@ impl Delegate {
         self.save_config(config)
     }
 
-    fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.ivars().runtime.shortcut.borrow_mut().register(text)
+    fn register_hotkey(&self, text: &str) -> Result<(), String> {
+        self.ivars().client.request(Request::Shortcut(text.into()))
     }
 
-    fn schedule_next(&self) {
-        let next = self.config().schedule.next(&Zoned::now());
-        *self.ivars().runtime.next.borrow_mut() = next.clone();
-        if let Some(timer) = self.ivars().timer.borrow_mut().take() {
-            timer.invalidate();
-        }
-
-        let Some(event) = next else {
-            self.update_window();
-            return;
-        };
-
-        let now = Zoned::now().timestamp().as_nanosecond();
-        let at = event.at.timestamp().as_nanosecond();
-        let seconds = (at - now).max(1) as f64 / 1_000_000_000.0;
-        let timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
-                seconds,
-                self,
-                sel!(scheduleFired:),
-                None,
-                false,
-            )
-        };
-        *self.ivars().timer.borrow_mut() = Some(timer);
-        self.update_window();
+    fn launch_at_login(&self) -> bool {
+        self.ivars().client.state().launch_at_login
     }
 
-    fn resume_schedule(&self) {
-        let now = Zoned::now();
-        let missed = self
-            .ivars()
-            .runtime
-            .next
-            .borrow()
-            .as_ref()
-            .is_some_and(|event| event.at.timestamp() <= now.timestamp());
-
-        if missed && let Some(mode) = self.config().schedule.current(&now) {
-            self.select(mode);
-        }
-        self.schedule_next();
+    fn set_launch_at_login(&self, enabled: bool) -> Result<(), String> {
+        self.ivars().client.request(Request::Launch(enabled))
     }
 }
 
@@ -530,63 +348,33 @@ fn toolbar_identifiers() -> Retained<NSArray<NSToolbarItemIdentifier>> {
     ])
 }
 
-pub(super) fn launch_at_login() -> bool {
-    unsafe {
-        matches!(
-            SMAppService::mainAppService().status(),
-            SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
-        )
-    }
-}
-
-fn set_launch_at_login(enabled: bool) -> Result<(), String> {
-    if launch_at_login() == enabled {
-        return Ok(());
-    }
-
-    unsafe {
-        let service = SMAppService::mainAppService();
-        let result = if enabled {
-            service.registerAndReturnError()
-        } else {
-            service.unregisterAndReturnError()
-        };
-        result.map_err(|error| format!("{error:?}"))
-    }
-}
-
-fn show_error(mtm: objc2_foundation::MainThreadMarker, title: &str, message: &str) {
+pub(crate) fn show_error(title: &str, message: &str) {
+    let mtm = objc2_foundation::MainThreadMarker::new().expect("alerts require the main thread");
+    let _app = NSApplication::sharedApplication(mtm);
     let alert = NSAlert::new(mtm);
     alert.setMessageText(&NSString::from_str(title));
     alert.setInformativeText(&NSString::from_str(message));
     alert.runModal();
 }
 
-pub fn run() {
+pub fn run() -> Result<(), String> {
     let mtm = objc2_foundation::MainThreadMarker::new().expect("pola must run on the main thread");
     let app = NSApplication::sharedApplication(mtm);
-    let config = match Config::load() {
-        Ok(config) => config,
-        Err(error) => {
-            show_error(mtm, "Could not load pola", &error.to_string());
-            return;
-        }
-    };
-    let delegate = Delegate::new(mtm, config);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    let client = Client::connect(|error| {
+        DispatchQueue::main().exec_async(move || {
+            if let Some(delegate) = DELEGATE.with(|slot| slot.borrow().clone()) {
+                delegate.update_window();
+                if let Some(error) = error {
+                    show_error("pola", &error);
+                }
+            }
+        });
+    })?;
+    let delegate = Delegate::new(mtm, client);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-
-    let address = &*delegate as *const Delegate as usize;
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state != HotKeyState::Pressed {
-            return;
-        }
-
-        let delegate = unsafe { &*(address as *const Delegate) };
-        let matches = delegate.ivars().runtime.shortcut.borrow().matches(event.id);
-        if matches {
-            delegate.toggle();
-        }
-    }));
-
+    DELEGATE.with(|slot| *slot.borrow_mut() = Some(delegate));
     app.run();
+    DELEGATE.with(|slot| slot.borrow_mut().take());
+    Ok(())
 }

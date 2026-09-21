@@ -92,7 +92,7 @@ pub struct Rule {
     pub mode: Mode,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Event {
     pub at: Zoned,
     pub mode: Mode,

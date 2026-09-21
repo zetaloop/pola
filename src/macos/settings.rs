@@ -12,7 +12,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol, NSString};
 
-use super::{Delegate, launch_at_login, set_launch_at_login, shortcut::Recorder, ui};
+use super::{Delegate, shortcut::Recorder, ui};
 
 pub struct Ivars {
     owner: Weak<Delegate>,
@@ -40,11 +40,13 @@ define_class!(
     impl Settings {
         #[unsafe(method(launchChanged:))]
         fn launch_changed(&self, sender: &NSSwitch) {
-            match set_launch_at_login(sender.state() == NSControlStateValueOn) {
-                Ok(()) => self.error(""),
-                Err(error) => self.error(&error),
+            if let Some(owner) = self.ivars().owner.load() {
+                match owner.set_launch_at_login(sender.state() == NSControlStateValueOn) {
+                    Ok(()) => self.error(""),
+                    Err(error) => self.error(&error),
+                }
+                self.update();
             }
-            self.update();
         }
 
         #[unsafe(method(applyChanged:))]
@@ -137,7 +139,9 @@ impl Settings {
     pub fn update(&self) {
         if let Some(owner) = self.ivars().owner.load() {
             let config = owner.config();
-            self.ivars().launch.setState(isize::from(launch_at_login()));
+            self.ivars()
+                .launch
+                .setState(isize::from(owner.launch_at_login()));
             self.ivars()
                 .apply
                 .setState(isize::from(config.schedule.apply_on_launch));

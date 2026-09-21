@@ -85,8 +85,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
+ "block2",
+ "libc",
  "objc2",
 ]
+
+[[package]]
+name = "doctest-file"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
 
 [[package]]
 name = "equivalent"
@@ -163,6 +171,25 @@ dependencies = [
  "equivalent",
  "hashbrown",
 ]
+
+[[package]]
+name = "interprocess"
+version = "2.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cb02ffbf25e8ef0f4a95bff054eef75f6d1bf16919474cf2caa63b21997478a"
+dependencies = [
+ "doctest-file",
+ "libc",
+ "recvmsg",
+ "widestring",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "itoa"
+version = "1.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jiff"
@@ -248,6 +275,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
 name = "objc2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -330,13 +363,16 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "pola"
 version = "0.1.0"
 dependencies = [
+ "dispatch2",
  "global-hotkey",
+ "interprocess",
  "jiff",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-service-management",
  "serde",
+ "serde_json",
  "tempfile",
  "toml",
  "windows",
@@ -388,6 +424,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "recvmsg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -434,6 +476,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "serde_json"
+version = "1.0.151"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+dependencies = [
+ "itoa",
+ "memchr",
+ "serde",
+ "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -556,6 +611,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 
 [[package]]
 name = "windows"
@@ -915,3 +976,9 @@ name = "xkeysym"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
+
+[[package]]
+name = "zmij"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

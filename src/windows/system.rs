@@ -19,6 +19,7 @@ use windows_registry::CURRENT_USER;
 use crate::mode::Mode;
 
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 pub fn mode() -> Result<Mode, String> {
     CURRENT_USER
@@ -62,6 +63,32 @@ pub fn set_mode(mode: Mode) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+pub fn launch_at_login() -> bool {
+    let Ok(path) = std::env::current_exe() else {
+        return false;
+    };
+    let expected = format!("\"{}\" daemon", path.display());
+    CURRENT_USER
+        .open(RUN)
+        .and_then(|key| key.get_string("pola"))
+        .is_ok_and(|value| value == expected)
+}
+
+pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    let key = CURRENT_USER
+        .create(RUN)
+        .map_err(|error| error.to_string())?;
+    if enabled {
+        let path = std::env::current_exe().map_err(|error| error.to_string())?;
+        key.set_string("pola", format!("\"{}\" daemon", path.display()))
+            .map_err(|error| error.to_string())
+    } else if key.get_string("pola").is_ok() {
+        key.remove_value("pola").map_err(|error| error.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn set_wallpaper(path: &Path) -> Result<(), String> {

@@ -5,21 +5,25 @@ use objc2_app_kit::{
     NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSScreen, NSWorkspace,
 };
 use objc2_foundation::{NSAppleScript, NSArray, NSString, NSURL};
+use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
 use crate::mode::Mode;
 
-pub fn mode(mtm: MainThreadMarker) -> Mode {
+pub fn mode() -> Result<Mode, String> {
+    let mtm = MainThreadMarker::new().expect("appearance reads require the main thread");
     let app = NSApplication::sharedApplication(mtm);
     let (aqua, dark_aqua) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
     let names = NSArray::from_slice(&[aqua, dark_aqua]);
-    match app
-        .effectiveAppearance()
-        .bestMatchFromAppearancesWithNames(&names)
-        .as_deref()
-    {
-        Some(name) if name == dark_aqua => Mode::Dark,
-        _ => Mode::Light,
-    }
+    Ok(
+        match app
+            .effectiveAppearance()
+            .bestMatchFromAppearancesWithNames(&names)
+            .as_deref()
+        {
+            Some(name) if name == dark_aqua => Mode::Dark,
+            _ => Mode::Light,
+        },
+    )
 }
 
 pub fn set_mode(mode: Mode) -> Result<(), String> {
@@ -40,6 +44,30 @@ pub fn set_mode(mode: Mode) -> Result<(), String> {
     match error {
         Some(error) => Err(format!("{error:?}")),
         None => Ok(()),
+    }
+}
+
+pub fn launch_at_login() -> bool {
+    unsafe {
+        matches!(
+            SMAppService::mainAppService().status(),
+            SMAppServiceStatus::Enabled | SMAppServiceStatus::RequiresApproval
+        )
+    }
+}
+
+pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
+    if launch_at_login() == enabled {
+        return Ok(());
+    }
+    unsafe {
+        let service = SMAppService::mainAppService();
+        let result = if enabled {
+            service.registerAndReturnError()
+        } else {
+            service.unregisterAndReturnError()
+        };
+        result.map_err(|error| format!("{error:?}"))
     }
 }
 
