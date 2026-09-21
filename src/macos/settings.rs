@@ -8,8 +8,8 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::{
-    NSColor, NSControlStateValueOn, NSGridCellPlacement, NSPopUpButton, NSSwitch, NSTextField,
-    NSView,
+    NSAccessibility, NSColor, NSControlStateValueOn, NSGridCellPlacement, NSPopUpButton, NSSwitch,
+    NSTextField, NSView,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
@@ -19,7 +19,6 @@ pub struct Ivars {
     owner: Weak<Delegate>,
     view: Retained<NSView>,
     launch: Retained<NSSwitch>,
-    apply: Retained<NSSwitch>,
     language: Retained<NSPopUpButton>,
     recorder: OnceCell<Retained<Recorder>>,
     error: Retained<NSTextField>,
@@ -60,19 +59,6 @@ define_class!(
             }
         }
 
-        #[unsafe(method(applyChanged:))]
-        fn apply_changed(&self, sender: &NSSwitch) {
-            if let Some(owner) = self.ivars().owner.load() {
-                let mut config = owner.config();
-                config.schedule.apply_on_launch = sender.state() == NSControlStateValueOn;
-                match owner.save_config(config) {
-                    Ok(()) => self.error(""),
-                    Err(error) => self.error(&error),
-                }
-                self.update();
-            }
-        }
-
         #[unsafe(method(clearShortcut:))]
         fn clear_shortcut(&self, _sender: &NSObject) {
             self.ivars().recorder.get().unwrap().finish();
@@ -92,29 +78,22 @@ impl Settings {
             NSString::from_str("简体中文"),
         ]));
         let launch = NSSwitch::new(mtm);
-        let apply = NSSwitch::new(mtm);
+        launch.setAccessibilityLabel(Some(&NSString::from_str(tr!("Launch at login"))));
+        language.setAccessibilityLabel(Some(&NSString::from_str(tr!("Language"))));
         let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
         error.setTextColor(Some(&NSColor::systemRedColor()));
         let this = Self::alloc(mtm).set_ivars(Ivars {
             owner: Weak::new(owner),
             view,
             launch,
-            apply,
             language,
             recorder: OnceCell::new(),
             error,
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        for (control, action) in [
-            (&this.ivars().launch, sel!(launchChanged:)),
-            (&this.ivars().apply, sel!(applyChanged:)),
-        ] {
-            unsafe {
-                control.setTarget(Some(&this));
-                control.setAction(Some(action));
-            }
-        }
         unsafe {
+            this.ivars().launch.setTarget(Some(&this));
+            this.ivars().launch.setAction(Some(sel!(launchChanged:)));
             this.ivars().language.setTarget(Some(&this));
             this.ivars()
                 .language
@@ -122,7 +101,6 @@ impl Settings {
         }
         let language_label = ui::label(mtm, tr!("Language"));
         let launch_label = ui::label(mtm, tr!("Launch at login"));
-        let apply_label = ui::label(mtm, tr!("Apply schedule on launch"));
         let recorder = this
             .ivars()
             .recorder
@@ -135,7 +113,6 @@ impl Settings {
             &[
                 [&language_label, &this.ivars().language],
                 [&launch_label, &this.ivars().launch],
-                [&apply_label, &this.ivars().apply],
                 [&shortcut_label, &controls],
             ],
         );
@@ -174,14 +151,15 @@ impl Settings {
                 .launch
                 .setState(isize::from(owner.launch_at_login()));
             self.ivars()
-                .apply
-                .setState(isize::from(config.schedule.apply_on_launch));
-            self.ivars()
                 .recorder
                 .get()
                 .unwrap()
                 .display(&config.shortcut);
         }
+    }
+
+    pub fn finish(&self) {
+        self.ivars().recorder.get().unwrap().finish();
     }
 
     pub fn error(&self, error: &str) {

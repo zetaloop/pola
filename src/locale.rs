@@ -215,6 +215,9 @@ macro_rules! zh {
     ("Weekends") => {
         "周末"
     };
+    ("{days}, {mode}") => {
+        "{days}，{mode}"
+    };
     ("{weekday} {time}") => {
         "{weekday}{time}"
     };

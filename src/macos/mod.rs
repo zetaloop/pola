@@ -60,9 +60,26 @@ define_class!(
             true
         }
 
+        #[unsafe(method(applicationWillTerminate:))]
+        fn terminating(&self, _notification: &NSNotification) {
+            if let Some(window) = self.ivars().window.get() { window.settings.finish(); }
+        }
+
         #[unsafe(method(applicationShouldTerminateAfterLastWindowClosed:))]
         fn terminate_after_close(&self, _app: &NSApplication) -> bool {
             true
+        }
+    }
+
+    unsafe impl NSWindowDelegate for Delegate {
+        #[unsafe(method(windowDidResignKey:))]
+        fn resign_key(&self, _notification: &NSNotification) {
+            if let Some(window) = self.ivars().window.get() { window.settings.finish(); }
+        }
+
+        #[unsafe(method(windowWillClose:))]
+        fn closing(&self, _notification: &NSNotification) {
+            if let Some(window) = self.ivars().window.get() { window.settings.finish(); }
         }
     }
 

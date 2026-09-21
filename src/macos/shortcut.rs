@@ -80,6 +80,7 @@ impl Recorder {
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
         this.setBezelStyle(NSBezelStyle::Push);
+        this.setAccessibilityLabel(Some(&NSString::from_str(tr!("Record global shortcut"))));
         unsafe {
             this.setTarget(Some(&this));
             this.setAction(Some(sel!(record:)));
@@ -126,6 +127,17 @@ impl Recorder {
             self.finish();
             return;
         }
+        if character == '\t' || character == '\u{19}' {
+            self.finish();
+            if let Some(window) = self.window() {
+                if event.modifierFlags().contains(NSEventModifierFlags::Shift) {
+                    window.selectPreviousKeyView(Some(self));
+                } else {
+                    window.selectNextKeyView(Some(self));
+                }
+            }
+            return;
+        }
         let key = match character as u32 {
             objc2_app_kit::NSUpArrowFunctionKey => "Up".into(),
             objc2_app_kit::NSDownArrowFunctionKey => "Down".into(),
@@ -143,7 +155,6 @@ impl Recorder {
             _ => match character {
                 ' ' => "Space".into(),
                 '\r' | '\n' => "Enter".into(),
-                '\t' => "Tab".into(),
                 '\u{7f}' | '\u{8}' => "Backspace".into(),
                 '\u{3}' => "NumpadEnter".into(),
                 _ if event
@@ -178,8 +189,9 @@ impl Recorder {
         parts.push(key);
         match HotKey::from_str(&parts.join("+")) {
             Ok(key) => {
-                owner.save_shortcut(&key.into_string());
-                self.finish();
+                if owner.save_shortcut(&key.into_string()) {
+                    self.finish();
+                }
             }
             Err(error) => owner.error(&error.to_string()),
         }

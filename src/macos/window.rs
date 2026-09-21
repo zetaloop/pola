@@ -22,6 +22,7 @@ impl Window {
         window.setContentMinSize(NSSize::new(420.0, 360.0));
         window.setFrameAutosaveName(ns_string!("main"));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+        window.setDelegate(Some(ProtocolObject::from_ref(delegate)));
 
         let navigation = NSTableView::new(mtm);
         navigation.setHeaderView(None);
@@ -48,10 +49,14 @@ impl Window {
         let schedule = schedule::Editor::new(mtm, delegate);
         let profiles = profiles::List::new(mtm, delegate);
         let settings = Settings::new(mtm, delegate);
-        let content = ui::pages(mtm, &[&appearance.view, schedule.view(), settings.view()]);
+        let content = ui::pages(mtm, &[&appearance.view, settings.view()]);
         content.insertTabViewItem_atIndex(
             &NSTabViewItem::tabViewItemWithViewController(profiles.controller()),
             1,
+        );
+        content.insertTabViewItem_atIndex(
+            &NSTabViewItem::tabViewItemWithViewController(schedule.controller()),
+            2,
         );
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content);
         content_item.setMinimumThickness(350.0);
@@ -78,6 +83,9 @@ impl Window {
     }
 
     pub fn show_page(&self, page: isize) {
+        if page != 3 {
+            self.settings.finish();
+        }
         self.window.makeFirstResponder(None);
         self.content.setSelectedTabViewItemIndex(page);
         if self.navigation.selectedRow() != page {
