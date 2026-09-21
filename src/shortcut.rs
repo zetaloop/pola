@@ -2,6 +2,8 @@ use std::{error::Error, str::FromStr};
 
 use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
 
+use crate::locale::tr;
+
 #[derive(Default)]
 pub struct Shortcut {
     manager: Option<GlobalHotKeyManager>,
@@ -33,7 +35,17 @@ impl Shortcut {
         }
 
         if let Err(error) = manager.register(hotkey) {
-            self.hotkey = old.filter(|old| manager.register(*old).is_ok());
+            self.hotkey = None;
+            if let Some(old) = old {
+                manager.register(old).map_err(|restore| {
+                    tr!(
+                        "{error}\nShortcut: {restore}",
+                        error = error,
+                        restore = restore
+                    )
+                })?;
+                self.hotkey = Some(old);
+            }
             return Err(error.into());
         }
 

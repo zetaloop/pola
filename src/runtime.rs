@@ -169,10 +169,15 @@ impl Runtime {
             .register(&config.shortcut)
             .map_err(|error| error.to_string())?;
         if let Err(error) = config.save() {
-            if let Err(restore) = self
-                .shortcut
-                .borrow_mut()
-                .register(&self.config.borrow().shortcut)
+            let previous = self.config.borrow();
+            if let Err(restore) =
+                self.shortcut
+                    .borrow_mut()
+                    .register(if self.recording.get().is_some() {
+                        ""
+                    } else {
+                        &previous.shortcut
+                    })
             {
                 return Err(tr!(
                     "{error}\nShortcut: {restore}",

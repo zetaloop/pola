@@ -157,6 +157,11 @@ define_class!(
             self.show_profiles();
         }
 
+        #[unsafe(method(dismissError:))]
+        fn dismiss_error(&self, _sender: &NSObject) {
+            if let Some(window) = self.ivars().window.get() { window.error(""); }
+        }
+
         #[unsafe(method(showSettings:))]
         fn show_settings(&self, _sender: &NSObject) {
             self.open_settings();
@@ -264,8 +269,14 @@ impl Delegate {
     }
 
     fn select(&self, mode: Mode) {
-        if let Err(error) = self.ivars().client.request(Request::Select(mode)) {
-            show_error(tr!("Could not change appearance"), &error);
+        let error = self
+            .ivars()
+            .client
+            .request(Request::Select(mode))
+            .err()
+            .unwrap_or_default();
+        if let Some(window) = self.ivars().window.get() {
+            window.error(&error);
         }
         self.update_window();
     }
@@ -339,7 +350,11 @@ pub fn run() -> Result<(), String> {
             if let Some(delegate) = DELEGATE.with(|slot| slot.borrow().clone()) {
                 delegate.update_window();
                 if let Some(error) = error {
-                    show_error("pola", &error);
+                    if let Some(window) = delegate.ivars().window.get() {
+                        window.error(&error);
+                    } else {
+                        show_error("pola", &error);
+                    }
                 }
             }
         });

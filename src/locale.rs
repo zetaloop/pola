@@ -155,6 +155,9 @@ macro_rules! zh {
     ("Save") => {
         "保存"
     };
+    ("Dismiss") => {
+        "关闭提示"
+    };
     ("Cancel") => {
         "取消"
     };

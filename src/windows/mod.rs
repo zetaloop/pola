@@ -52,7 +52,7 @@ impl Drop for Instance {
 
 enum OpenWindow {
     Closed,
-    Opening,
+    Opening(Option<String>),
     Open(Callback<window::Event>),
 }
 
@@ -107,10 +107,10 @@ impl AppState {
             let mut window = self.window.borrow_mut();
             match &*window {
                 OpenWindow::Closed => {
-                    *window = OpenWindow::Opening;
+                    *window = OpenWindow::Opening(None);
                     None
                 }
-                OpenWindow::Opening => return,
+                OpenWindow::Opening(_) => return,
                 OpenWindow::Open(activate) => Some(activate.clone()),
             }
         };
@@ -131,7 +131,10 @@ impl AppState {
     }
 
     pub(crate) fn window_opened(&self, activate: Callback<window::Event>) {
-        *self.window.borrow_mut() = OpenWindow::Open(activate);
+        let previous = self.window.replace(OpenWindow::Open(activate.clone()));
+        if let OpenWindow::Opening(Some(error)) = previous {
+            _ = activate.call(window::Event::Error(error));
+        }
     }
 
     pub(crate) fn window_closed(&self) {
@@ -141,9 +144,15 @@ impl AppState {
     }
 
     fn notify_window(&self, event: window::Event) {
-        let callback = match &*self.window.borrow() {
+        let callback = match &mut *self.window.borrow_mut() {
             OpenWindow::Open(callback) => Some(callback.clone()),
-            _ => None,
+            OpenWindow::Opening(pending) => {
+                if let window::Event::Error(error) = &event {
+                    *pending = Some(error.clone());
+                }
+                None
+            }
+            OpenWindow::Closed => None,
         };
         if let Some(callback) = callback {
             _ = callback.call(event);
@@ -209,11 +218,10 @@ impl AppState {
         self.client.state().mode
     }
 
-    fn select(&self, mode: Mode) {
-        if let Err(error) = self.client.request(Request::Select(mode)) {
-            show_error(tr!("Could not change appearance"), &error);
-        }
+    fn select(&self, mode: Mode) -> Result<(), String> {
+        self.client.request(Request::Select(mode))?;
         self.notify_window(window::Event::Changed);
+        Ok(())
     }
 
     fn run_profile(&self, name: &str) -> Result<(), String> {
@@ -271,10 +279,7 @@ pub fn run() -> Result<(), String> {
         let client = Client::connect(move |error| {
             if let Err(dispatch_error) = proxy.dispatch(move |_| {
                 if let Some(state) = APP.with(|slot| slot.borrow().clone()) {
-                    state.notify_window(window::Event::Changed);
-                    if let Some(error) = error {
-                        show_error("pola", &error);
-                    }
+                    state.notify_window(error.map_or(window::Event::Changed, window::Event::Error));
                 }
             }) {
                 eprintln!("Window notification: {dispatch_error}");

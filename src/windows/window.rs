@@ -21,11 +21,12 @@ impl PartialEq for WindowInput {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Event {
     Activate,
     Changed,
     Focus(bool),
+    Error(String),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -98,6 +99,10 @@ impl Component for Main {
             }
             Message::Runtime(Event::Changed) => self.mode = self.state.system_mode(),
             Message::Runtime(Event::Focus(value)) => self.focused = value,
+            Message::Runtime(Event::Error(error)) => {
+                self.mode = self.state.system_mode();
+                self.status = error;
+            }
             Message::Navigate(Some(tag)) => {
                 self.page = match tag.as_str() {
                     "profiles" => Page::Profiles,
@@ -162,8 +167,11 @@ impl Component for Main {
                 self.back = None;
             }
             Message::Mode(Some(index)) => {
-                self.state
-                    .select(if index == 1 { Mode::Dark } else { Mode::Light });
+                self.status = self
+                    .state
+                    .select(if index == 1 { Mode::Dark } else { Mode::Light })
+                    .err()
+                    .unwrap_or_default();
                 self.mode = self.state.system_mode();
             }
             Message::Mode(None) => {}

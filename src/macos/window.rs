@@ -1,9 +1,9 @@
-use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject};
+use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSIndexSet, NSSize, ns_string};
+use objc2_foundation::{MainThreadMarker, NSIndexSet, NSSize, NSString, ns_string};
 
 use super::{Delegate, appearance::Appearance, profiles, schedule, settings::Settings, ui};
-use crate::{mode::Mode, schedule::Event};
+use crate::{locale::tr, mode::Mode, schedule::Event};
 
 pub struct Window {
     pub window: Retained<NSWindow>,
@@ -13,6 +13,8 @@ pub struct Window {
     pub settings: Retained<Settings>,
     navigation: Retained<NSTableView>,
     appearance: Appearance,
+    status: Retained<NSTextField>,
+    notice: Retained<NSStackView>,
 }
 
 impl Window {
@@ -58,7 +60,32 @@ impl Window {
             &NSTabViewItem::tabViewItemWithViewController(schedule.controller()),
             2,
         );
-        let content_item = NSSplitViewItem::splitViewItemWithViewController(&content);
+        let status = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
+        status.setTextColor(Some(&NSColor::systemRedColor()));
+        let dismiss = ui::button(mtm, tr!("Dismiss"), delegate, sel!(dismissError:));
+        dismiss.setContentHuggingPriority_forOrientation(
+            NSLayoutPriorityDefaultHigh,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
+        let notice = ui::stack(mtm, true, &[&status, &dismiss]);
+        notice.setHidden(true);
+        notice.setContentHuggingPriority_forOrientation(
+            NSLayoutPriorityDefaultHigh,
+            NSLayoutConstraintOrientation::Vertical,
+        );
+        let body = ui::stack(mtm, false, &[&notice, &content.view()]);
+        body.setSpacing(0.0);
+        body.setDistribution(NSStackViewDistribution::Fill);
+        for child in [&*notice as &NSView, &*content.view()] {
+            child
+                .widthAnchor()
+                .constraintEqualToAnchor(&body.widthAnchor())
+                .setActive(true);
+        }
+        let container = NSViewController::new(mtm);
+        container.addChildViewController(&content);
+        container.setView(&body);
+        let content_item = NSSplitViewItem::splitViewItemWithViewController(&container);
         content_item.setMinimumThickness(350.0);
         content_item.setAutomaticallyAdjustsSafeAreaInsets(true);
         let split = NSSplitViewController::new(mtm);
@@ -79,6 +106,8 @@ impl Window {
             settings,
             navigation,
             appearance,
+            status,
+            notice,
         }
     }
 
@@ -101,6 +130,11 @@ impl Window {
         self.profiles.update();
         self.schedule.update();
         self.settings.update();
+    }
+
+    pub fn error(&self, message: &str) {
+        self.status.setStringValue(&NSString::from_str(message));
+        self.notice.setHidden(message.is_empty());
     }
 
     pub fn show(&self) {
