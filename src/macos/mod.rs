@@ -14,18 +14,17 @@ use objc2::{
 };
 use objc2_app_kit::*;
 use objc2_foundation::{
-    NSAppleScript, NSArray, NSData, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-    NSNotification, NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration,
-    NSObjectProtocol, NSSize, NSString, NSSystemClockDidChangeNotification,
-    NSSystemTimeZoneDidChangeNotification, NSTimer, NSURL, ns_string,
+    NSArray, NSData, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions, NSNotification,
+    NSNotificationCenter, NSObject, NSObjectNSKeyValueObserverRegistration, NSObjectProtocol,
+    NSSize, NSString, NSSystemClockDidChangeNotification, NSSystemTimeZoneDidChangeNotification,
+    NSTimer, ns_string,
 };
 use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
 use crate::{
     config::{Config, Profile},
     mode::Mode,
-    schedule::Event,
-    shortcut::Shortcut,
+    runtime::Runtime,
 };
 
 mod file;
@@ -33,31 +32,13 @@ mod profile;
 mod schedule;
 mod settings;
 mod shortcut;
+pub(crate) mod system;
 mod ui;
 mod window;
 
-struct State {
-    config: Config,
-    applied: Option<Mode>,
-    timer: Option<Retained<NSTimer>>,
-    next: Option<Event>,
-    shortcut: Shortcut,
-}
-
-impl State {
-    fn new(config: Config) -> Self {
-        Self {
-            config,
-            applied: None,
-            timer: None,
-            next: None,
-            shortcut: Shortcut::default(),
-        }
-    }
-}
-
 struct DelegateIvars {
-    state: RefCell<State>,
+    runtime: Runtime,
+    timer: RefCell<Option<Retained<NSTimer>>>,
     status_item: OnceCell<Retained<NSStatusItem>>,
     settings: OnceCell<Retained<settings::Settings>>,
     window: OnceCell<window::Window>,
@@ -271,7 +252,8 @@ impl Drop for Delegate {
 impl Delegate {
     fn new(mtm: objc2_foundation::MainThreadMarker, config: Config) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
-            state: RefCell::new(State::new(config)),
+            runtime: Runtime::new(config),
+            timer: RefCell::new(None),
             status_item: OnceCell::new(),
             settings: OnceCell::new(),
             window: OnceCell::new(),
@@ -287,7 +269,7 @@ impl Delegate {
         self.build_menu();
         self.observe_system();
 
-        let shortcut = self.ivars().state.borrow().config.shortcut.clone();
+        let shortcut = self.config().shortcut;
         if let Err(error) = self.register_hotkey(&shortcut) {
             show_error(
                 self.mtm(),
@@ -297,9 +279,9 @@ impl Delegate {
         }
 
         let mode = {
-            let state = self.ivars().state.borrow();
-            if state.config.schedule.enabled && state.config.schedule.apply_on_launch {
-                state.config.schedule.current(&Zoned::now())
+            let config = self.config();
+            if config.schedule.enabled && config.schedule.apply_on_launch {
+                config.schedule.current(&Zoned::now())
             } else {
                 None
             }
@@ -434,8 +416,8 @@ impl Delegate {
 
     fn update_window(&self) {
         if let Some(window) = self.ivars().window.get() {
-            let state = self.ivars().state.borrow();
-            window.update(&state.config, self.system_mode(), state.next.as_ref());
+            let next = self.ivars().runtime.next.borrow().clone();
+            window.update(&self.config(), self.system_mode(), next.as_ref());
         }
         if let Some(settings) = self.ivars().settings.get() {
             settings.update();
@@ -443,42 +425,17 @@ impl Delegate {
     }
 
     fn config(&self) -> Config {
-        self.ivars().state.borrow().config.clone()
+        self.ivars().runtime.config.borrow().clone()
     }
 
     fn save_config(&self, config: Config) -> Result<(), String> {
-        let old = self.config();
-        self.register_hotkey(&config.shortcut)
-            .map_err(|error| error.to_string())?;
-        if let Err(error) = config.save() {
-            if let Err(restore) = self.register_hotkey(&old.shortcut) {
-                return Err(format!("{error}\nShortcut: {restore}"));
-            }
-            return Err(error.to_string());
-        }
-        let mode = self.system_mode();
-        let changed = old.profile(mode) != config.profile(mode);
-        self.ivars().state.borrow_mut().config = config;
-        if changed {
-            self.ivars().state.borrow_mut().applied = None;
-            self.apply(mode);
-        }
+        self.ivars().runtime.save(config)?;
         self.schedule_next();
         Ok(())
     }
 
     fn system_mode(&self) -> Mode {
-        let app = NSApplication::sharedApplication(self.mtm());
-        let (aqua, dark_aqua) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
-        let names = NSArray::from_slice(&[aqua, dark_aqua]);
-        match app
-            .effectiveAppearance()
-            .bestMatchFromAppearancesWithNames(&names)
-            .as_deref()
-        {
-            Some(name) if name == dark_aqua => Mode::Dark,
-            _ => Mode::Light,
-        }
+        system::mode(self.mtm())
     }
 
     fn toggle(&self) {
@@ -487,79 +444,23 @@ impl Delegate {
     }
 
     fn select(&self, mode: Mode) {
-        if self.system_mode() != mode {
-            let source = NSString::from_str(match mode {
-                Mode::Light => {
-                    "tell application \"System Events\" to tell appearance preferences to set dark mode to false"
-                }
-                Mode::Dark => {
-                    "tell application \"System Events\" to tell appearance preferences to set dark mode to true"
-                }
-            });
-            if let Some(script) = NSAppleScript::initWithSource(NSAppleScript::alloc(), &source) {
-                let mut error = None;
-                unsafe {
-                    script.executeAndReturnError(Some(&mut error));
-                }
-                if let Some(error) = error {
-                    show_error(
-                        self.mtm(),
-                        "Could not change appearance",
-                        &format!("{error:?}"),
-                    );
-                    return;
-                }
-            }
+        if self.system_mode() != mode
+            && let Err(error) = system::set_mode(mode)
+        {
+            show_error(self.mtm(), "Could not change appearance", &error);
+            return;
         }
-
         self.apply(mode);
     }
 
     fn apply(&self, mode: Mode) {
-        {
-            let state = self.ivars().state.borrow();
-            if state.applied == Some(mode) {
-                return;
-            }
-        }
-
-        let profile = self.ivars().state.borrow().config.profile(mode).clone();
-        self.apply_profile(&profile);
-        self.ivars().state.borrow_mut().applied = Some(mode);
-    }
-
-    fn apply_profile(&self, profile: &Profile) {
-        let mut errors = Vec::new();
-
-        if let Some(path) = &profile.wallpaper {
-            let workspace = NSWorkspace::sharedWorkspace();
-            let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-
-            for screen in NSScreen::screens(self.mtm()).iter() {
-                let options = workspace
-                    .desktopImageOptionsForScreen(&screen)
-                    .unwrap_or_default();
-                if let Err(error) = unsafe {
-                    workspace.setDesktopImageURL_forScreen_options_error(&url, &screen, &options)
-                } {
-                    errors.push(format!("Wallpaper: {error:?}"));
-                }
-            }
-        }
-
-        for command in &profile.commands {
-            if let Err(error) = command.run() {
-                errors.push(format!("{}: {error}", command.program));
-            }
-        }
-
-        if !errors.is_empty() {
-            show_error(self.mtm(), "Could not apply appearance", &errors.join("\n"));
+        if let Err(error) = self.ivars().runtime.apply(mode) {
+            show_error(self.mtm(), "Could not apply appearance", &error);
         }
     }
 
     fn save_profile(&self, mode: Mode, profile: Profile) -> Result<(), String> {
-        let mut config = self.ivars().state.borrow().config.clone();
+        let mut config = self.config();
         if config.profile(mode) == &profile {
             return Ok(());
         }
@@ -571,26 +472,17 @@ impl Delegate {
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.ivars().state.borrow_mut().shortcut.register(text)
+        self.ivars().runtime.shortcut.borrow_mut().register(text)
     }
 
     fn schedule_next(&self) {
-        let next = self
-            .ivars()
-            .state
-            .borrow()
-            .config
-            .schedule
-            .next(&Zoned::now());
-
-        let mut state = self.ivars().state.borrow_mut();
-        if let Some(timer) = state.timer.take() {
+        let next = self.config().schedule.next(&Zoned::now());
+        *self.ivars().runtime.next.borrow_mut() = next.clone();
+        if let Some(timer) = self.ivars().timer.borrow_mut().take() {
             timer.invalidate();
         }
-        state.next = next.clone();
 
         let Some(event) = next else {
-            drop(state);
             self.update_window();
             return;
         };
@@ -607,8 +499,7 @@ impl Delegate {
                 false,
             )
         };
-        state.timer = Some(timer);
-        drop(state);
+        *self.ivars().timer.borrow_mut() = Some(timer);
         self.update_window();
     }
 
@@ -616,9 +507,9 @@ impl Delegate {
         let now = Zoned::now();
         let missed = self
             .ivars()
-            .state
-            .borrow()
+            .runtime
             .next
+            .borrow()
             .as_ref()
             .is_some_and(|event| event.at.timestamp() <= now.timestamp());
 
@@ -691,7 +582,7 @@ pub fn run() {
         }
 
         let delegate = unsafe { &*(address as *const Delegate) };
-        let matches = delegate.ivars().state.borrow().shortcut.matches(event.id);
+        let matches = delegate.ivars().runtime.shortcut.borrow().matches(event.id);
         if matches {
             delegate.toggle();
         }

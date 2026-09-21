@@ -1,9 +1,4 @@
-use std::{
-    cell::{Cell, RefCell},
-    os::windows::ffi::OsStrExt,
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use jiff::Zoned;
@@ -12,18 +7,11 @@ use windows::{
         Foundation::{
             CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, WPARAM,
         },
-        System::{
-            Com::{CLSCTX_ALL, CoCreateInstance},
-            Threading::CreateMutexW,
-        },
-        UI::{
-            Shell::{DWPOS_SPAN, DesktopWallpaper, IDesktopWallpaper},
-            WindowsAndMessaging::{
-                FindWindowW, HWND_BROADCAST, KillTimer, MB_ICONERROR, MB_OK, MessageBoxW,
-                PBT_APMRESUMEAUTOMATIC, PostMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
-                SetTimer, WM_APP, WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED,
-                WM_TIMECHANGE, WM_TIMER,
-            },
+        System::Threading::CreateMutexW,
+        UI::WindowsAndMessaging::{
+            FindWindowW, KillTimer, MB_ICONERROR, MB_OK, MessageBoxW, PBT_APMRESUMEAUTOMATIC,
+            PostMessageW, SetTimer, WM_APP, WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED,
+            WM_TIMECHANGE, WM_TIMER,
         },
     },
     core::{PCWSTR, w},
@@ -33,22 +21,17 @@ use windows_reactor::*;
 use windows_registry::CURRENT_USER;
 use windows_window::Window;
 
-use crate::{
-    config::{Config, Profile},
-    mode::Mode,
-    schedule::Event,
-    shortcut::Shortcut,
-};
+use crate::{config::Config, mode::Mode, runtime::Runtime};
 
 mod profile;
 mod schedule;
 mod settings;
+pub(crate) mod system;
 mod window;
 
 const TIMER_ID: usize = 1;
 const SHOW_WINDOW: u32 = WM_APP + 1;
 const RUNTIME: windows::core::PCWSTR = w!("io.github.zetaloop.pola.runtime");
-const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 struct Instance(HANDLE);
@@ -70,13 +53,10 @@ enum OpenWindow {
 pub(crate) struct AppState {
     _instance: Instance,
     app: AppContext,
-    config: RefCell<Config>,
-    applied: Cell<Option<Mode>>,
-    next: RefCell<Option<Event>>,
+    runtime: Runtime,
     icon: RefCell<Option<NotifyIcon>>,
     message_window: RefCell<Option<Window>>,
     window: RefCell<OpenWindow>,
-    shortcut: RefCell<Shortcut>,
 }
 
 impl AppState {
@@ -84,13 +64,10 @@ impl AppState {
         Rc::new(Self {
             _instance: instance,
             app: app.clone(),
-            config: RefCell::new(config),
-            applied: Cell::new(None),
-            next: RefCell::new(None),
+            runtime: Runtime::new(config),
             icon: RefCell::new(None),
             message_window: RefCell::new(None),
             window: RefCell::new(OpenWindow::Closed),
-            shortcut: RefCell::new(Shortcut::default()),
         })
     }
 
@@ -98,13 +75,13 @@ impl AppState {
         self.add_message_window()?;
         self.add_icon()?;
 
-        let shortcut = self.config.borrow().shortcut.clone();
+        let shortcut = self.config().shortcut;
         if let Err(error) = self.register_hotkey(&shortcut) {
             show_error("Could not register shortcut", &error.to_string());
         }
 
         let mode = {
-            let config = self.config.borrow();
+            let config = self.config();
             if config.schedule.enabled && config.schedule.apply_on_launch {
                 config.schedule.current(&Zoned::now())
             } else {
@@ -127,7 +104,7 @@ impl AppState {
                 return;
             }
             let state = unsafe { &*(address as *const AppState) };
-            if state.shortcut.borrow().matches(event.id) {
+            if state.runtime.shortcut.borrow().matches(event.id) {
                 state.toggle();
             }
         }));
@@ -260,7 +237,7 @@ impl AppState {
     }
 
     pub(crate) fn config(&self) -> Config {
-        self.config.borrow().clone()
+        self.runtime.config.borrow().clone()
     }
 
     pub(crate) fn launch_at_login(&self) -> bool {
@@ -268,87 +245,29 @@ impl AppState {
     }
 
     pub(crate) fn save_config(&self, config: Config, launch: bool) -> Result<(), String> {
-        let old = self.config.borrow().clone();
         let old_launch = launch_at_login();
-        let mode = self.system_mode()?;
-
-        self.register_hotkey(&config.shortcut)
-            .map_err(|error| error.to_string())?;
-
-        if old_launch != launch
-            && let Err(error) = set_launch_at_login(launch)
-        {
-            _ = self.register_hotkey(&old.shortcut);
-            return Err(error);
+        if old_launch != launch {
+            set_launch_at_login(launch)?;
         }
-
-        if let Err(error) = config.save() {
-            _ = self.register_hotkey(&old.shortcut);
-            if old_launch != launch {
-                _ = set_launch_at_login(old_launch);
+        if let Err(error) = self.runtime.save(config) {
+            if old_launch != launch
+                && let Err(restore) = set_launch_at_login(old_launch)
+            {
+                return Err(format!("{error}\nLaunch at login: {restore}"));
             }
-            return Err(error.to_string());
-        }
-
-        let profile_changed = old.profile(mode) != config.profile(mode);
-
-        *self.config.borrow_mut() = config;
-        if profile_changed {
-            self.applied.set(None);
-            self.apply(mode);
+            return Err(error);
         }
         self.schedule_next();
         Ok(())
     }
 
     fn system_mode(&self) -> Result<Mode, String> {
-        CURRENT_USER
-            .open(PERSONALIZE)
-            .and_then(|key| key.get_u32("SystemUsesLightTheme"))
-            .map(|value| if value == 0 { Mode::Dark } else { Mode::Light })
-            .map_err(|error| error.to_string())
-    }
-
-    fn set_system_mode(&self, mode: Mode) -> Result<(), String> {
-        let key = CURRENT_USER
-            .create(PERSONALIZE)
-            .map_err(|error| error.to_string())?;
-        let value = u32::from(mode == Mode::Light);
-        key.set_u32("SystemUsesLightTheme", value)
-            .and_then(|_| key.set_u32("AppsUseLightTheme", value))
-            .map_err(|error| error.to_string())?;
-
-        let setting = "ImmersiveColorSet"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-
-        unsafe {
-            SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_SETTINGCHANGE,
-                WPARAM(0),
-                LPARAM(setting.as_ptr() as isize),
-                SMTO_ABORTIFHUNG,
-                2000,
-                None,
-            );
-            SendMessageTimeoutW(
-                HWND_BROADCAST,
-                WM_THEMECHANGED,
-                WPARAM(0),
-                LPARAM(0),
-                SMTO_ABORTIFHUNG,
-                2000,
-                None,
-            );
-        }
-        Ok(())
+        system::mode()
     }
 
     fn select(&self, mode: Mode) {
         if !self.system_mode().is_ok_and(|current| current == mode)
-            && let Err(error) = self.set_system_mode(mode)
+            && let Err(error) = system::set_mode(mode)
         {
             show_error("Could not change appearance", &error);
             return;
@@ -364,38 +283,14 @@ impl AppState {
     }
 
     fn apply(&self, mode: Mode) {
-        if self.applied.get() == Some(mode) {
-            return;
+        if let Err(error) = self.runtime.apply(mode) {
+            show_error("Could not apply appearance", &error);
         }
-
-        let profile = self.config.borrow().profile(mode).clone();
-        self.apply_profile(&profile);
-        self.applied.set(Some(mode));
         self.notify_window();
     }
 
-    fn apply_profile(&self, profile: &Profile) {
-        let mut errors = Vec::new();
-
-        if let Some(path) = &profile.wallpaper
-            && let Err(error) = set_wallpaper(path)
-        {
-            errors.push(format!("Wallpaper: {error}"));
-        }
-
-        for command in &profile.commands {
-            if let Err(error) = command.run() {
-                errors.push(format!("{}: {error}", command.program));
-            }
-        }
-
-        if !errors.is_empty() {
-            show_error("Could not apply appearance", &errors.join("\n"));
-        }
-    }
-
     fn register_hotkey(&self, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-        self.shortcut.borrow_mut().register(text)
+        self.runtime.shortcut.borrow_mut().register(text)
     }
 
     fn schedule_fired(&self) {
@@ -406,8 +301,8 @@ impl AppState {
     }
 
     fn schedule_next(&self) {
-        let next = self.config.borrow().schedule.next(&Zoned::now());
-        *self.next.borrow_mut() = next.clone();
+        let next = self.config().schedule.next(&Zoned::now());
+        *self.runtime.next.borrow_mut() = next.clone();
         self.notify_window();
 
         let window = self.message_window.borrow();
@@ -440,6 +335,7 @@ impl AppState {
     fn resume_schedule(&self) {
         let now = Zoned::now();
         let missed = self
+            .runtime
             .next
             .borrow()
             .as_ref()
@@ -450,21 +346,6 @@ impl AppState {
         }
         self.schedule_next();
     }
-}
-
-fn set_wallpaper(path: &std::path::Path) -> windows::core::Result<()> {
-    let wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-
-    unsafe {
-        let wallpaper: IDesktopWallpaper = CoCreateInstance(&DesktopWallpaper, None, CLSCTX_ALL)?;
-        wallpaper.SetPosition(DWPOS_SPAN)?;
-        wallpaper.SetWallpaper(PCWSTR::null(), PCWSTR(wide.as_ptr()))?;
-    }
-    Ok(())
 }
 
 fn icon_path() -> PathBuf {
