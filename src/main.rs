@@ -41,7 +41,10 @@ fn main() -> std::process::ExitCode {
                         eprintln!("{error}");
                     }
                 })?;
-                client.request(ipc::Request::Run(name.into()))
+                client.request(ipc::Request::Run {
+                    name: name.into(),
+                    wait: true,
+                })
             }),
         _ => Err("Usage: pola [daemon | run NAME]".into()),
     };

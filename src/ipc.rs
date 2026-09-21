@@ -10,7 +10,11 @@ use std::{
 use interprocess::local_socket::{Listener, ListenerOptions, Name, Stream, prelude::*};
 use serde::{Deserialize, Serialize};
 
-use crate::{config::Config, mode::Mode, schedule::Event};
+use crate::{
+    config::{Action, Config},
+    mode::Mode,
+    schedule::Event,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct State {
@@ -18,6 +22,7 @@ pub struct State {
     pub mode: Result<Mode, String>,
     pub next: Option<Event>,
     pub launch_at_login: bool,
+    pub busy: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -25,7 +30,7 @@ pub enum Request {
     Subscribe,
     Save(Config),
     Select(Mode),
-    Run(String),
+    Run { name: String, wait: bool },
     Shortcut(String),
     Launch(bool),
 }
@@ -45,6 +50,14 @@ pub enum Incoming {
     },
     Closed(usize),
     Error(String),
+    Action {
+        action: Action,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    Finished {
+        result: Result<(), String>,
+        reply: Option<mpsc::Sender<Response>>,
+    },
 }
 
 fn directory() -> io::Result<PathBuf> {
@@ -346,6 +359,7 @@ mod tests {
                 mode: Ok(Mode::Light),
                 next: None,
                 launch_at_login: false,
+                busy: false,
             };
             assert!(matches!(
                 read(&mut reader).unwrap(),

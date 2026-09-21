@@ -1,4 +1,4 @@
-use std::{os::windows::ffi::OsStrExt, path::Path};
+use std::{ffi::c_void, os::windows::ffi::OsStrExt, path::Path};
 
 use windows::{
     Win32::{
@@ -12,7 +12,7 @@ use windows::{
             },
         },
     },
-    core::PCWSTR,
+    core::{BSTR, GUID, HRESULT, IUnknown_Vtbl, Interface, PCWSTR},
 };
 use windows_registry::CURRENT_USER;
 
@@ -88,6 +88,35 @@ pub fn set_launch_at_login(enabled: bool) -> Result<(), String> {
         key.remove_value("pola").map_err(|error| error.to_string())
     } else {
         Ok(())
+    }
+}
+
+// ThemeUI.dll COM interface, implemented by CThemeManagerShared.
+windows::core::imp::define_interface!(
+    IThemeManagerShared,
+    IThemeManagerSharedVtable,
+    0x0646ebbe_c1b7_4045_8fd0_ffd65d3fc792
+);
+
+#[repr(C)]
+pub struct IThemeManagerSharedVtable {
+    pub base: IUnknown_Vtbl,
+    pub get_current_theme: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> HRESULT,
+    pub apply_theme: unsafe extern "system" fn(*mut c_void, *const u16) -> HRESULT,
+}
+
+pub fn set_theme(path: &Path) -> Result<(), String> {
+    let path = BSTR::from_wide(&path.as_os_str().encode_wide().collect::<Vec<_>>());
+    unsafe {
+        let manager: IThemeManagerShared = CoCreateInstance(
+            &GUID::from_u128(0xc04b329e_5823_4415_9c93_ba44688947b0),
+            None,
+            CLSCTX_ALL,
+        )
+        .map_err(|error| error.to_string())?;
+        (manager.vtable().apply_theme)(manager.as_raw(), path.as_ptr())
+            .ok()
+            .map_err(|error| error.to_string())
     }
 }
 

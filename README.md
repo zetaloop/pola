@@ -2,7 +2,7 @@
 
 pola is a native light and dark appearance tool for Windows 11 and macOS 27.
 
-It follows system appearance changes, runs a weekly schedule with multiple transitions per day, and provides a configurable global shortcut and launch-at-login control. Named configurations apply wallpapers and commands when the system switches to their selected appearances. Several configurations can respond to the same change. Settings use WinUI on Windows and AppKit on macOS.
+It follows system appearance changes, runs a weekly schedule with multiple transitions per day, and provides a configurable global shortcut and launch-at-login control. Named configurations contain ordered actions for system appearance, wallpaper, and commands, with theme files supported on Windows. An appearance change runs matching configurations in list order. Settings use WinUI on Windows and AppKit on macOS.
 
 Open pola to show the main window. A separate background process handles appearance changes, schedules, and the global shortcut while the window is closed. Appearance editors accept dropped wallpaper images and program files, with individual fields for command arguments. Schedule rules use native time pickers.
 
@@ -41,4 +41,6 @@ Each configuration has a unique name and can also run independently from the app
 pola run "Night desktop"
 ```
 
-Editing saves the configuration. Running it applies its wallpaper and commands. Commands are stored as an executable and an argument array, matching the process arguments exactly.
+Editing saves the configuration. Running it executes each action in order. Commands normally finish before the next action starts. For long-running programs, an action can finish as soon as the program starts. Each command stores an executable and an argument array, matching the process arguments exactly.
+
+Automatic runs start while pola is idle. During execution, appearance changes update the observed state; further run requests report that pola is busy.

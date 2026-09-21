@@ -119,6 +119,9 @@ impl List {
     }
 
     pub fn update(&self) {
+        if let Some(editor) = self.ivars().editor.borrow().as_ref() {
+            editor.update();
+        }
         if let Some(owner) = self.ivars().owner.load() {
             let profiles = owner.config().profiles;
             if *self.ivars().profiles.borrow() != profiles {
@@ -148,11 +151,11 @@ impl List {
         self.show_list();
         let name = profile.as_ref().map(|profile| profile.name.clone());
         let editor = profile::Editor::new(self.mtm(), &owner, name, profile.unwrap_or_default());
-        let controller = NSViewController::new(self.mtm());
-        controller.setView(editor.view());
         self.ivars()
             .pages
-            .addTabViewItem(&NSTabViewItem::tabViewItemWithViewController(&controller));
+            .addTabViewItem(&NSTabViewItem::tabViewItemWithViewController(
+                editor.controller(),
+            ));
         self.ivars().pages.setSelectedTabViewItemIndex(1);
         editor.focus();
         *self.ivars().editor.borrow_mut() = Some(editor);

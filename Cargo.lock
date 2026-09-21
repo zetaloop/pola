@@ -352,6 +352,7 @@ dependencies = [
  "tempfile",
  "toml",
  "windows",
+ "windows-core 0.62.2",
  "windows-reactor",
  "windows-reactor-setup",
  "windows-registry",

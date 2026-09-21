@@ -1,4 +1,8 @@
-use std::{cell::OnceCell, rc::Rc, sync::mpsc};
+use std::{
+    cell::OnceCell,
+    rc::Rc,
+    sync::{OnceLock, mpsc},
+};
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use jiff::Zoned;
@@ -16,6 +20,7 @@ use crate::{config::Config, ipc, runtime::Runtime};
 
 const INCOMING: u32 = WM_APP + 1;
 const TIMER: usize = 1;
+static CHANNEL: OnceLock<(mpsc::Sender<Message>, usize)> = OnceLock::new();
 
 enum Message {
     Request(ipc::Incoming),
@@ -42,6 +47,16 @@ impl Daemon {
             self.runtime
                 .report(windows::core::Error::from_thread().to_string());
         }
+    }
+}
+
+pub fn receive(incoming: ipc::Incoming) {
+    let (sender, address) = CHANNEL.get().expect("daemon channel is initialized");
+    if sender.send(Message::Request(incoming)).is_ok()
+        && let Err(error) =
+            unsafe { PostMessageW(Some(HWND(*address as _)), INCOMING, WPARAM(0), LPARAM(0)) }
+    {
+        eprintln!("Daemon notification: {error}");
     }
 }
 
@@ -98,6 +113,7 @@ pub fn run(ready: bool) -> Result<(), String> {
     let address = window.hwnd() as usize;
     daemon.window.set(window).ok().unwrap();
     let keys = sender.clone();
+    CHANNEL.set((sender, address)).ok().unwrap();
     GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
         if event.state == HotKeyState::Pressed
             && keys.send(Message::Hotkey(event.id)).is_ok()
@@ -109,14 +125,7 @@ pub fn run(ready: bool) -> Result<(), String> {
     }));
     daemon.runtime.start();
     daemon.schedule();
-    ipc::serve(listener, move |incoming| {
-        if sender.send(Message::Request(incoming)).is_ok()
-            && let Err(error) =
-                unsafe { PostMessageW(Some(HWND(address as _)), INCOMING, WPARAM(0), LPARAM(0)) }
-        {
-            eprintln!("IPC notification: {error}");
-        }
-    });
+    ipc::serve(listener, receive);
     if ready {
         ipc::ready().map_err(|error| error.to_string())?;
     }

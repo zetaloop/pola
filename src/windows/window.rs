@@ -250,6 +250,7 @@ impl Main {
                             .content(name.clone()),
                         Button::new()
                             .grid_column(1)
+                            .is_enabled(!self.state.client.state().busy)
                             .on_click(context.message(Message::Run(name)))
                             .content("Run"),
                     )),

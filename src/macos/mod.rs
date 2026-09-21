@@ -14,6 +14,7 @@ use crate::{
     mode::Mode,
 };
 
+mod action;
 pub(crate) mod daemon;
 mod file;
 mod profile;
@@ -293,7 +294,10 @@ impl Delegate {
     }
 
     fn run_profile(&self, name: &str) -> Result<(), String> {
-        self.ivars().client.request(Request::Run(name.into()))
+        self.ivars().client.request(Request::Run {
+            name: name.into(),
+            wait: false,
+        })
     }
 
     fn show_profiles(&self) {

@@ -1,17 +1,18 @@
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
-    sync::mpsc::Sender,
+    sync::mpsc::{self, Sender},
+    thread,
 };
 
 use jiff::Zoned;
 
 #[cfg(target_os = "macos")]
-use crate::macos::system;
+use crate::macos::{daemon, system};
 #[cfg(target_os = "windows")]
-use crate::windows::system;
+use crate::windows::{daemon, system};
 use crate::{
-    config::{Config, Profile},
+    config::{Action, Config, Profile},
     ipc::{Incoming, Request, Response, State},
     mode::Mode,
     schedule::Event,
@@ -23,6 +24,7 @@ pub struct Runtime {
     pub shortcut: RefCell<Shortcut>,
     pub next: RefCell<Option<Event>>,
     applied: Cell<Option<Mode>>,
+    busy: Cell<bool>,
     peers: RefCell<BTreeMap<usize, Sender<Response>>>,
     recording: Cell<Option<usize>>,
     error: RefCell<Option<String>>,
@@ -35,6 +37,7 @@ impl Runtime {
             shortcut: RefCell::new(Shortcut::default()),
             next: RefCell::new(None),
             applied: Cell::new(None),
+            busy: Cell::new(false),
             peers: RefCell::new(BTreeMap::new()),
             recording: Cell::new(None),
             error: RefCell::new(None),
@@ -71,8 +74,9 @@ impl Runtime {
         State {
             next: config.schedule.next(&Zoned::now()),
             config,
-            mode: system::mode(),
+            mode: self.mode(),
             launch_at_login: system::launch_at_login(),
+            busy: self.busy.get(),
         }
     }
 
@@ -93,7 +97,13 @@ impl Runtime {
                     }
                     Request::Save(config) => self.save(config),
                     Request::Select(mode) => self.select(mode),
-                    Request::Run(name) => self.run(&name),
+                    Request::Run { name, wait } => {
+                        let result = self.run(&name, wait.then(|| reply.clone()));
+                        if wait && result.is_ok() {
+                            return;
+                        }
+                        result
+                    }
                     Request::Shortcut(text) => {
                         let result = self
                             .shortcut
@@ -123,6 +133,30 @@ impl Runtime {
                 }
             }
             Incoming::Error(error) => self.report(error),
+            Incoming::Action { action, reply } => {
+                let result = match action {
+                    Action::Color { mode } => self.select(mode),
+                    #[cfg(target_os = "windows")]
+                    Action::Theme { path } => {
+                        let result = system::set_theme(&path);
+                        if let Err(error) = self.observe() {
+                            self.report(error);
+                        }
+                        result
+                    }
+                    Action::Wallpaper { path } => system::set_wallpaper(&path),
+                    Action::Command(_) => unreachable!("commands run on the execution thread"),
+                };
+                _ = reply.send(result);
+            }
+            Incoming::Finished { result, reply } => {
+                self.busy.set(false);
+                if let Some(reply) = reply {
+                    _ = reply.send(Response::Reply(result.map(|()| self.state())));
+                } else if let Err(error) = result {
+                    self.report(error);
+                }
+            }
         }
     }
 
@@ -147,20 +181,28 @@ impl Runtime {
         Ok(())
     }
 
+    fn mode(&self) -> Result<Mode, String> {
+        self.applied.get().map(Ok).unwrap_or_else(system::mode)
+    }
+
     pub fn select(&self, mode: Mode) -> Result<(), String> {
-        if !system::mode().is_ok_and(|current| current == mode) {
+        if !self.mode().is_ok_and(|current| current == mode) {
             system::set_mode(mode)?;
         }
-        self.observe()
+        self.changed(mode)
     }
 
     pub fn toggle(&self) -> Result<(), String> {
-        self.select(system::mode()?.toggle())
+        self.select(self.mode()?.toggle())
     }
 
     pub fn observe(&self) -> Result<(), String> {
-        let mode = system::mode()?;
-        if self.applied.replace(Some(mode)) == Some(mode) {
+        self.changed(system::mode()?)
+    }
+
+    fn changed(&self, mode: Mode) -> Result<(), String> {
+        let changed = self.applied.replace(Some(mode)) != Some(mode);
+        if !changed || self.busy.get() {
             return Ok(());
         }
         let profiles = self
@@ -171,48 +213,66 @@ impl Runtime {
             .filter(|profile| profile.when.contains(&mode))
             .cloned()
             .collect::<Vec<_>>();
-        let errors = profiles
-            .iter()
-            .filter_map(|profile| {
-                self.apply_profile(profile)
-                    .err()
-                    .map(|error| format!("{}: {error}", profile.name))
-            })
-            .collect::<Vec<_>>();
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("\n"))
+        if profiles.is_empty() {
+            return Ok(());
         }
+        self.execute(profiles, None)
     }
 
-    pub fn run(&self, name: &str) -> Result<(), String> {
+    pub fn run(&self, name: &str, reply: Option<Sender<Response>>) -> Result<(), String> {
         let profile = self
             .config
             .borrow()
             .profile(name)
             .cloned()
             .ok_or_else(|| format!("Configuration {name:?} was not found."))?;
-        self.apply_profile(&profile)
+        self.execute(vec![profile], reply)
     }
 
-    fn apply_profile(&self, profile: &Profile) -> Result<(), String> {
-        let mut errors = Vec::new();
-        if let Some(path) = &profile.wallpaper
-            && let Err(error) = system::set_wallpaper(path)
-        {
-            errors.push(format!("Wallpaper: {error}"));
+    fn execute(
+        &self,
+        profiles: Vec<Profile>,
+        reply: Option<Sender<Response>>,
+    ) -> Result<(), String> {
+        if self.busy.replace(true) {
+            return Err("A configuration is already running.".into());
         }
-        for command in &profile.commands {
-            if let Err(error) = command.run() {
-                errors.push(format!("{}: {error}", command.program));
+        if let Err(error) = thread::Builder::new().spawn(move || {
+            let mut errors = Vec::new();
+            'profiles: for profile in profiles {
+                for action in profile.actions {
+                    let result = match action {
+                        Action::Command(command) => command
+                            .run()
+                            .map_err(|error| format!("{}: {error}", command.program)),
+                        action => {
+                            let (reply, result) = mpsc::channel();
+                            daemon::receive(Incoming::Action { action, reply });
+                            match result.recv() {
+                                Ok(result) => result,
+                                Err(error) => {
+                                    errors.push(error.to_string());
+                                    break 'profiles;
+                                }
+                            }
+                        }
+                    };
+                    if let Err(error) = result {
+                        errors.push(format!("{}: {error}", profile.name));
+                    }
+                }
             }
+            let result = if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(errors.join("\n"))
+            };
+            daemon::receive(Incoming::Finished { result, reply });
+        }) {
+            self.busy.set(false);
+            return Err(error.to_string());
         }
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors.join("\n"))
-        }
+        Ok(())
     }
 
     pub fn scheduled(&self) -> Result<(), String> {
@@ -255,5 +315,33 @@ impl Runtime {
         self.peers
             .borrow_mut()
             .retain(|_, peer| peer.send(response.clone()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_during_execution_are_consumed() {
+        let runtime = Runtime::new(Config {
+            profiles: vec![Profile {
+                name: "Night".into(),
+                when: [Mode::Dark].into(),
+                ..Profile::default()
+            }],
+            ..Config::default()
+        });
+        runtime.applied.set(Some(Mode::Light));
+        runtime.busy.set(true);
+        runtime.changed(Mode::Dark).unwrap();
+        assert_eq!(runtime.applied.get(), Some(Mode::Dark));
+        assert!(runtime.run("Night", None).is_err());
+        runtime.receive(Incoming::Finished {
+            result: Ok(()),
+            reply: None,
+        });
+        runtime.changed(Mode::Dark).unwrap();
+        assert!(!runtime.busy.get());
     }
 }

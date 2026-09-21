@@ -159,17 +159,7 @@ impl Delegate {
         }));
         self.ivars().runtime.start();
         self.schedule();
-        ipc::serve(
-            self.ivars().listener.borrow_mut().take().unwrap(),
-            |incoming| {
-                DispatchQueue::main().exec_async(move || {
-                    if let Some(daemon) = DAEMON.with(|slot| slot.borrow().clone()) {
-                        daemon.ivars().runtime.receive(incoming);
-                        daemon.schedule();
-                    }
-                });
-            },
-        );
+        ipc::serve(self.ivars().listener.borrow_mut().take().unwrap(), receive);
         if self.ivars().ready {
             ipc::ready().map_err(|error| error.to_string())?;
         }
@@ -210,6 +200,15 @@ impl Drop for Delegate {
             }
         }
     }
+}
+
+pub fn receive(incoming: ipc::Incoming) {
+    DispatchQueue::main().exec_async(move || {
+        if let Some(daemon) = DAEMON.with(|slot| slot.borrow().clone()) {
+            daemon.ivars().runtime.receive(incoming);
+            daemon.schedule();
+        }
+    });
 }
 
 pub fn run(ready: bool) -> Result<(), String> {

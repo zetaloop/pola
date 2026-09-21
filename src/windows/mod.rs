@@ -22,6 +22,7 @@ use crate::{
     mode::Mode,
 };
 
+mod action;
 pub(crate) mod daemon;
 mod profile;
 mod schedule;
@@ -184,7 +185,10 @@ impl AppState {
     }
 
     fn run_profile(&self, name: &str) -> Result<(), String> {
-        self.client.request(Request::Run(name.into()))
+        self.client.request(Request::Run {
+            name: name.into(),
+            wait: false,
+        })
     }
 
     fn register_hotkey(&self, text: &str) -> Result<(), String> {

@@ -1,12 +1,48 @@
 use objc2::{
-    MainThreadOnly,
+    MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Sel},
 };
 use objc2_app_kit::*;
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString,
+    MainThreadMarker, NSArray, NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
 };
+
+define_class!(
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    struct Content;
+    unsafe impl NSObjectProtocol for Content {}
+    impl Content {
+        #[unsafe(method(isFlipped))]
+        fn flipped(&self) -> bool { true }
+    }
+);
+
+pub fn scroll(parent: &NSView, content: &NSView) {
+    let mtm = parent.mtm();
+    let document: Retained<Content> =
+        unsafe { msg_send![super(Content::alloc(mtm).set_ivars(())), init] };
+    document.setTranslatesAutoresizingMaskIntoConstraints(false);
+    let scroll = NSScrollView::new(mtm);
+    scroll.setDrawsBackground(false);
+    scroll.setHasVerticalScroller(true);
+    scroll.setDocumentView(Some(&document));
+    document
+        .widthAnchor()
+        .constraintEqualToAnchor(&scroll.contentView().widthAnchor())
+        .setActive(true);
+    mount(&document, content, 20.0);
+    content
+        .bottomAnchor()
+        .constraintEqualToAnchor_constant(&document.bottomAnchor(), -20.0)
+        .setActive(true);
+    mount(parent, &scroll, 0.0);
+    scroll
+        .bottomAnchor()
+        .constraintEqualToAnchor(&parent.safeAreaLayoutGuide().bottomAnchor())
+        .setActive(true);
+}
 
 pub fn window(mtm: MainThreadMarker, title: &str, width: f64, height: f64) -> Retained<NSWindow> {
     let window = unsafe {
