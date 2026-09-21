@@ -131,13 +131,16 @@ pub fn listen(ready: bool) -> io::Result<Option<(File, Listener)>> {
             Err(error) => return Err(error),
         }
     }
-    let options = ListenerOptions::new().name(name()?);
+    let listener = ListenerOptions::new().name(name()?).create_sync()?;
     #[cfg(unix)]
-    let options = {
-        use interprocess::os::unix::local_socket::ListenerOptionsExt;
-        options.mode(0o600)
-    };
-    Ok(Some((lock, options.create_sync()?)))
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            directory()?.join("daemon.sock"),
+            fs::Permissions::from_mode(0o600),
+        )?;
+    }
+    Ok(Some((lock, listener)))
 }
 
 pub fn serve(listener: Listener, incoming: impl Fn(Incoming) + Send + Sync + 'static) {
