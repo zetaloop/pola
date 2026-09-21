@@ -102,7 +102,7 @@ impl List {
             .constraintEqualToAnchor(&content.widthAnchor())
             .setActive(true);
         let view = NSView::new(mtm);
-        ui::mount(&view, &content, 24.0);
+        ui::mount(&view, &content);
         let controller = NSViewController::new(mtm);
         controller.setView(&view);
         this.ivars()

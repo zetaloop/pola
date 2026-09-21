@@ -248,7 +248,7 @@ impl Editor {
                 .constraintEqualToAnchor(&content.widthAnchor())
                 .setActive(true);
         }
-        ui::mount(&this.ivars().view, &content, 24.0);
+        ui::mount(&this.ivars().view, &content);
         this.update();
         this
     }
@@ -359,7 +359,7 @@ impl Editor {
             .widthAnchor()
             .constraintEqualToAnchor(&content.widthAnchor())
             .setActive(true);
-        ui::mount(&window.contentView().unwrap(), &content, 24.0);
+        ui::mount(&window.contentView().unwrap(), &content);
         self.view()
             .window()
             .unwrap()

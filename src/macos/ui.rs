@@ -32,16 +32,27 @@ pub fn scroll(parent: &NSView, content: &NSView) {
         .widthAnchor()
         .constraintEqualToAnchor(&scroll.contentView().widthAnchor())
         .setActive(true);
-    mount(&document, content, 20.0);
+    mount(&document, content);
     content
         .bottomAnchor()
-        .constraintEqualToAnchor_constant(&document.bottomAnchor(), -20.0)
+        .constraintEqualToAnchor(&document.layoutMarginsGuide().bottomAnchor())
         .setActive(true);
-    mount(parent, &scroll, 0.0);
-    scroll
-        .bottomAnchor()
-        .constraintEqualToAnchor(&parent.safeAreaLayoutGuide().bottomAnchor())
-        .setActive(true);
+    parent.addSubview(&scroll);
+    scroll.setTranslatesAutoresizingMaskIntoConstraints(false);
+    NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+        scroll
+            .leadingAnchor()
+            .constraintEqualToAnchor(&parent.leadingAnchor()),
+        scroll
+            .trailingAnchor()
+            .constraintEqualToAnchor(&parent.trailingAnchor()),
+        scroll
+            .topAnchor()
+            .constraintEqualToAnchor(&parent.topAnchor()),
+        scroll
+            .bottomAnchor()
+            .constraintEqualToAnchor(&parent.bottomAnchor()),
+    ]));
 }
 
 pub fn window(mtm: MainThreadMarker, title: &str, width: f64, height: f64) -> Retained<NSWindow> {
@@ -102,23 +113,27 @@ pub fn actions(mtm: MainThreadMarker, views: &[&NSView]) -> Retained<NSStackView
     actions
 }
 
-pub fn mount(parent: &NSView, child: &NSView, margin: f64) {
+pub fn mount(parent: &NSView, child: &NSView) {
     parent.addSubview(child);
     child.setTranslatesAutoresizingMaskIntoConstraints(false);
-    let region = parent.safeAreaLayoutGuide();
+    let region = parent.layoutGuideForLayoutRegion(
+        &NSViewLayoutRegion::marginsLayoutRegionWithCornerAdaptation(
+            NSViewLayoutRegionAdaptivityAxis::Horizontal,
+        ),
+    );
     NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
         child
             .leadingAnchor()
-            .constraintEqualToAnchor_constant(&region.leadingAnchor(), margin),
+            .constraintEqualToAnchor(&region.leadingAnchor()),
         child
             .trailingAnchor()
-            .constraintEqualToAnchor_constant(&region.trailingAnchor(), -margin),
+            .constraintEqualToAnchor(&region.trailingAnchor()),
         child
             .topAnchor()
-            .constraintEqualToAnchor_constant(&region.topAnchor(), margin),
+            .constraintEqualToAnchor(&region.topAnchor()),
         child
             .bottomAnchor()
-            .constraintLessThanOrEqualToAnchor_constant(&region.bottomAnchor(), -margin),
+            .constraintLessThanOrEqualToAnchor(&region.bottomAnchor()),
     ]));
 }
 

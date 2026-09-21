@@ -8,7 +8,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::*;
-use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string};
+use objc2_foundation::{NSArray, NSNotification, NSObject, NSObjectProtocol, NSString};
 
 use crate::{
     config::{Config, Profile},
@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod action;
+mod appearance;
 pub(crate) mod daemon;
 mod file;
 pub(crate) mod locale;
@@ -35,7 +36,6 @@ thread_local! {
 
 struct DelegateIvars {
     client: Client,
-    settings: OnceCell<Retained<settings::Settings>>,
     window: OnceCell<window::Window>,
 }
 
@@ -79,37 +79,12 @@ define_class!(
         ) -> Retained<NSArray<NSToolbarItemIdentifier>> {
             toolbar_identifiers()
         }
-
-        #[unsafe(method_id(toolbar:itemForItemIdentifier:willBeInsertedIntoToolbar:))]
-        fn toolbar_item(
-            &self,
-            _toolbar: &NSToolbar,
-            identifier: &NSToolbarItemIdentifier,
-            _insert: bool,
-        ) -> Option<Retained<NSToolbarItem>> {
-            let item = match identifier.to_string().as_str() {
-                "settings" => Some((tr!("Settings"), "gearshape", sel!(showSettings:))),
-                _ => None,
-            };
-            item.map(|(title, symbol, action)| {
-                let item =
-                    NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(self.mtm()), identifier);
-                item.setLabel(&NSString::from_str(title));
-                item.setImage(Some(&ui::symbol(symbol, title)));
-                item.setBordered(true);
-                unsafe {
-                    item.setTarget(Some(self));
-                    item.setAction(Some(action));
-                }
-                item
-            })
-        }
     }
 
     unsafe impl NSTableViewDataSource for Delegate {
         #[unsafe(method(numberOfRowsInTableView:))]
         fn navigation_rows(&self, _table: &NSTableView) -> isize {
-            3
+            4
         }
     }
 
@@ -127,6 +102,7 @@ define_class!(
                 (tr!("Appearance"), "circle.lefthalf.filled"),
                 (tr!("Configurations"), "list.bullet"),
                 (tr!("Schedule"), "calendar"),
+                (tr!("Settings"), "gearshape"),
             ][row as usize];
             Some(ui::cell(self.mtm(), name, Some(&ui::symbol(symbol, name))).into_super())
         }
@@ -180,7 +156,6 @@ impl Delegate {
     fn new(mtm: objc2_foundation::MainThreadMarker, client: Client) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars {
             client,
-            settings: OnceCell::new(),
             window: OnceCell::new(),
         });
         unsafe { msg_send![super(this), init] }
@@ -241,11 +216,10 @@ impl Delegate {
     }
 
     fn open_settings(&self) {
-        let settings = self
-            .ivars()
-            .settings
-            .get_or_init(|| settings::Settings::new(self.mtm(), self));
-        settings.show();
+        self.open_window();
+        if let Some(window) = self.ivars().window.get() {
+            window.show_page(3);
+        }
     }
 
     fn update_window(&self) {
@@ -255,9 +229,6 @@ impl Delegate {
                 state.mode.expect("AppKit appearance is available"),
                 state.next.as_ref(),
             );
-        }
-        if let Some(settings) = self.ivars().settings.get() {
-            settings.update();
         }
     }
 
@@ -330,8 +301,8 @@ impl Delegate {
 fn toolbar_identifiers() -> Retained<NSArray<NSToolbarItemIdentifier>> {
     NSArray::from_slice(&[
         unsafe { NSToolbarToggleSidebarItemIdentifier },
+        unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier },
         unsafe { NSToolbarFlexibleSpaceItemIdentifier },
-        ns_string!("settings"),
     ])
 }
 

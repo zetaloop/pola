@@ -1,10 +1,8 @@
-use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject, sel};
-
-use crate::locale::tr;
+use objc2::{MainThreadOnly, rc::Retained, runtime::ProtocolObject};
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSArray, NSIndexSet, NSSize, NSString, ns_string};
+use objc2_foundation::{MainThreadMarker, NSIndexSet, NSSize, ns_string};
 
-use super::{Delegate, profiles, schedule, ui};
+use super::{Delegate, appearance::Appearance, profiles, schedule, settings::Settings, ui};
 use crate::{mode::Mode, schedule::Event};
 
 pub struct Window {
@@ -12,16 +10,16 @@ pub struct Window {
     content: Retained<NSTabViewController>,
     pub schedule: Retained<schedule::Editor>,
     pub profiles: Retained<profiles::List>,
+    pub settings: Retained<Settings>,
     navigation: Retained<NSTableView>,
-    mode: Retained<NSSegmentedControl>,
-    next: Retained<NSTextField>,
+    appearance: Appearance,
 }
 
 impl Window {
     pub fn new(mtm: MainThreadMarker, delegate: &Delegate) -> Self {
-        let window = ui::window(mtm, "pola", 820.0, 500.0);
+        let window = ui::window(mtm, "pola", 680.0, 480.0);
         window.setStyleMask(window.styleMask() | NSWindowStyleMask::FullSizeContentView);
-        window.setContentMinSize(NSSize::new(620.0, 420.0));
+        window.setContentMinSize(NSSize::new(420.0, 360.0));
         window.setFrameAutosaveName(ns_string!("main"));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
 
@@ -46,38 +44,17 @@ impl Window {
         sidebar.setView(&sidebar_scroll);
         let sidebar = NSSplitViewItem::sidebarWithViewController(&sidebar);
 
-        let title = ui::heading(mtm, tr!("Appearance"));
-        let mode = unsafe {
-            NSSegmentedControl::segmentedControlWithLabels_trackingMode_target_action(
-                &NSArray::from_slice(&[
-                    &*NSString::from_str(tr!("Light")),
-                    &*NSString::from_str(tr!("Dark")),
-                ]),
-                NSSegmentSwitchTracking::SelectOne,
-                Some(delegate),
-                Some(sel!(selectMode:)),
-                mtm,
-            )
-        };
-        mode.setControlSize(NSControlSize::Large);
-        let next = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
-        next.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        let body = ui::stack(mtm, false, &[&title, &mode, &next]);
-        body.setSpacing(24.0);
-        next.widthAnchor()
-            .constraintEqualToAnchor(&body.widthAnchor())
-            .setActive(true);
-        let appearance = NSView::new(mtm);
-        ui::mount(&appearance, &body, 24.0);
-
+        let appearance = Appearance::new(mtm, delegate);
         let schedule = schedule::Editor::new(mtm, delegate);
         let profiles = profiles::List::new(mtm, delegate);
-        let content = ui::pages(mtm, &[&appearance, schedule.view()]);
+        let settings = Settings::new(mtm, delegate);
+        let content = ui::pages(mtm, &[&appearance.view, schedule.view(), settings.view()]);
         content.insertTabViewItem_atIndex(
             &NSTabViewItem::tabViewItemWithViewController(profiles.controller()),
             1,
         );
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content);
+        content_item.setMinimumThickness(350.0);
         content_item.setAutomaticallyAdjustsSafeAreaInsets(true);
         let split = NSSplitViewController::new(mtm);
         split.addSplitViewItem(&sidebar);
@@ -94,9 +71,9 @@ impl Window {
             content,
             schedule,
             profiles,
+            settings,
             navigation,
-            mode,
-            next,
+            appearance,
         }
     }
 
@@ -112,15 +89,10 @@ impl Window {
     }
 
     pub fn update(&self, mode: Mode, next: Option<&Event>) {
-        self.mode
-            .setSelectedSegment(isize::from(mode == Mode::Dark));
-        self.next.setStringValue(&NSString::from_str(
-            &next
-                .map(|event| crate::locale::next(event).unwrap_or_else(|error| error))
-                .unwrap_or_default(),
-        ));
+        self.appearance.update(mode, next);
         self.profiles.update();
         self.schedule.update();
+        self.settings.update();
     }
 
     pub fn show(&self) {

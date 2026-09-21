@@ -5,22 +5,19 @@ use crate::locale::{Locale, tr};
 use objc2::{
     DefinedClass, MainThreadOnly, define_class, msg_send,
     rc::{Retained, Weak},
-    runtime::ProtocolObject,
     sel,
 };
 use objc2_app_kit::{
     NSColor, NSControlStateValueOn, NSGridCellPlacement, NSPopUpButton, NSSwitch, NSTextField,
-    NSWindow, NSWindowDelegate,
+    NSView,
 };
-use objc2_foundation::{
-    MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSRect, NSString,
-};
+use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
 
 use super::{Delegate, shortcut::Recorder, ui};
 
 pub struct Ivars {
     owner: Weak<Delegate>,
-    window: Retained<NSWindow>,
+    view: Retained<NSView>,
     launch: Retained<NSSwitch>,
     apply: Retained<NSSwitch>,
     language: Retained<NSPopUpButton>,
@@ -35,12 +32,6 @@ define_class!(
     pub struct Settings;
 
     unsafe impl NSObjectProtocol for Settings {}
-    unsafe impl NSWindowDelegate for Settings {
-        #[unsafe(method(windowWillClose:))]
-        fn closing(&self, _notification: &NSNotification) {
-            self.ivars().recorder.get().unwrap().finish();
-        }
-    }
 
     impl Settings {
         #[unsafe(method(languageChanged:))]
@@ -92,7 +83,7 @@ define_class!(
 
 impl Settings {
     pub fn new(mtm: MainThreadMarker, owner: &Delegate) -> Retained<Self> {
-        let window = ui::window(mtm, tr!("Settings"), 480.0, 320.0);
+        let view = NSView::new(mtm);
         let language =
             NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
         language.addItemsWithTitles(&NSArray::from_retained_slice(&[
@@ -106,7 +97,7 @@ impl Settings {
         error.setTextColor(Some(&NSColor::systemRedColor()));
         let this = Self::alloc(mtm).set_ivars(Ivars {
             owner: Weak::new(owner),
-            window,
+            view,
             launch,
             apply,
             language,
@@ -114,9 +105,6 @@ impl Settings {
             error,
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        this.ivars()
-            .window
-            .setDelegate(Some(ProtocolObject::from_ref(&*this)));
         for (control, action) in [
             (&this.ivars().launch, sel!(launchChanged:)),
             (&this.ivars().apply, sel!(applyChanged:)),
@@ -153,7 +141,8 @@ impl Settings {
         );
         form.columnAtIndex(1)
             .setXPlacement(NSGridCellPlacement::Trailing);
-        let content = ui::stack(mtm, false, &[&form, &this.ivars().error]);
+        let title = ui::heading(mtm, tr!("Settings"));
+        let content = ui::stack(mtm, false, &[&title, &form, &this.ivars().error]);
         form.widthAnchor()
             .constraintEqualToAnchor(&content.widthAnchor())
             .setActive(true);
@@ -162,14 +151,13 @@ impl Settings {
             .widthAnchor()
             .constraintEqualToAnchor(&content.widthAnchor())
             .setActive(true);
-        ui::mount(&this.ivars().window.contentView().unwrap(), &content, 24.0);
+        ui::scroll(&this.ivars().view, &content);
         this.update();
         this
     }
 
-    pub fn show(&self) {
-        self.update();
-        ui::show(&self.ivars().window);
+    pub fn view(&self) -> &NSView {
+        &self.ivars().view
     }
 
     pub fn update(&self) {
