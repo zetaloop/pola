@@ -8,7 +8,7 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSRect, NSString};
+use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
 
 use super::{file::FileInput, profile, ui};
 use crate::{
@@ -40,7 +40,6 @@ pub struct Ivars {
     owner: Weak<profile::Editor>,
     index: Option<usize>,
     view: Retained<NSView>,
-    kind: Retained<NSPopUpButton>,
     body: Retained<NSStackView>,
     error: Retained<NSTextField>,
     fields: RefCell<Option<Fields>>,
@@ -54,10 +53,18 @@ define_class!(
 
     unsafe impl NSObjectProtocol for Editor {}
     impl Editor {
-        #[unsafe(method(kindChanged:))]
-        fn kind_changed(&self, sender: &NSPopUpButton) {
-            if let Some(action) = Action::choices().get(sender.indexOfSelectedItem() as usize) {
-                self.build(action);
+        #[unsafe(method(chooseFile:))]
+        fn choose_file(&self, _sender: &NSObject) {
+            let field = match self.ivars().fields.borrow().as_ref() {
+                Some(Fields::Wallpaper { path, .. }) => Some(path.clone()),
+                Some(Fields::Command { program, .. }) => Some(program.clone()),
+                _ => None,
+            };
+            if let Some(field) = field {
+                let owner = Weak::new(self);
+                field.choose(move |error| {
+                    if let Some(owner) = owner.load() { owner.ivars().error.setStringValue(&NSString::from_str(&error)); }
+                });
             }
         }
 
@@ -130,38 +137,18 @@ impl Editor {
         index: Option<usize>,
         action: &Action,
     ) -> Retained<Self> {
-        let kind =
-            NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
-        let choices = Action::choices();
-        kind.addItemsWithTitles(&NSArray::from_retained_slice(
-            &choices
-                .iter()
-                .map(|action| NSString::from_str(action.title()))
-                .collect::<Vec<_>>(),
-        ));
-        kind.selectItemAtIndex(
-            choices
-                .iter()
-                .position(|choice| std::mem::discriminant(choice) == std::mem::discriminant(action))
-                .unwrap() as isize,
-        );
         let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
         error.setTextColor(Some(&NSColor::systemRedColor()));
         let this = Self::alloc(mtm).set_ivars(Ivars {
             owner: Weak::new(owner),
             index,
             view: NSView::new(mtm),
-            kind,
             body: ui::stack(mtm, false, &[]),
             error,
             fields: RefCell::new(None),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        unsafe {
-            this.ivars().kind.setTarget(Some(&this));
-            this.ivars().kind.setAction(Some(sel!(kindChanged:)));
-        }
-        let heading = ui::heading(mtm, tr!("Action"));
+        let heading = ui::heading(mtm, action.title());
         let save = ui::button(mtm, tr!("Save"), &this, sel!(saveAction:));
         save.setTintProminence(NSTintProminence::Primary);
         let cancel = ui::button(mtm, tr!("Cancel"), &this, sel!(cancelAction:));
@@ -169,13 +156,7 @@ impl Editor {
         let content = ui::stack(
             mtm,
             false,
-            &[
-                &heading,
-                &this.ivars().kind,
-                &this.ivars().body,
-                &this.ivars().error,
-                &buttons,
-            ],
+            &[&heading, &this.ivars().body, &this.ivars().error, &buttons],
         );
         for view in [
             &*this.ivars().body as &NSView,
@@ -229,7 +210,7 @@ impl Editor {
                     .constraintEqualToConstant(180.0)
                     .setActive(true);
                 views.push(preview.clone().into_super().into_super());
-                views.push(input.clone().into_super().into_super().into_super());
+                views.push(self.file(&input).into_super());
                 Fields::Wallpaper {
                     path: input,
                     preview,
@@ -260,7 +241,7 @@ impl Editor {
                     NSControlStateValueOff
                 });
                 views.push(ui::label(mtm, tr!("Program")).into_super().into_super());
-                views.push(program.clone().into_super().into_super().into_super());
+                views.push(self.file(&program).into_super());
                 views.push(arguments.clone().into_super());
                 views.push(add.into_super().into_super());
                 views.push(wait.clone().into_super().into_super());
@@ -285,6 +266,15 @@ impl Editor {
         self.ivars().error.setStringValue(&NSString::new());
         self.layout_arguments();
         self.preview();
+    }
+
+    fn file(&self, field: &FileInput) -> Retained<NSStackView> {
+        let choose = ui::button(self.mtm(), tr!("Choose…"), self, sel!(chooseFile:));
+        choose.setContentHuggingPriority_forOrientation(
+            NSLayoutPriorityDefaultHigh,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
+        ui::stack(self.mtm(), true, &[field, &choose])
     }
 
     fn preview(&self) {

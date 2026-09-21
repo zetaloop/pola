@@ -86,6 +86,9 @@ macro_rules! zh {
     ("New configuration") => {
         "新建配置"
     };
+    ("Create configuration") => {
+        "创建配置"
+    };
     ("Delete configuration") => {
         "删除配置"
     };
@@ -121,6 +124,9 @@ macro_rules! zh {
     };
     ("File") => {
         "文件"
+    };
+    ("Choose…") => {
+        "选择…"
     };
     ("Program") => {
         "程序"
@@ -352,6 +358,9 @@ macro_rules! zh {
     };
     ("Could not activate the window.") => {
         "无法激活窗口。"
+    };
+    ("Could not open the file picker.") => {
+        "无法打开文件选择器。"
     };
     ("Could not open window") => {
         "无法打开窗口"

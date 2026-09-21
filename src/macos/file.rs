@@ -1,13 +1,15 @@
 use crate::locale::tr;
 
+use block2::RcBlock;
 use objc2::{
     MainThreadOnly, define_class, msg_send,
-    rc::Retained,
+    rc::{Retained, Weak},
     runtime::{ProtocolObject, Sel},
 };
 use objc2_app_kit::{
     NSControlTextEditingDelegate, NSDragOperation, NSDraggingDestination, NSDraggingInfo,
-    NSPasteboardTypeFileURL, NSTextField, NSTextFieldBezelStyle, NSTextFieldDelegate,
+    NSModalResponseAbort, NSModalResponseOK, NSOpenPanel, NSPasteboardTypeFileURL, NSTextField,
+    NSTextFieldBezelStyle, NSTextFieldDelegate,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSString, NSURL,
@@ -71,6 +73,25 @@ impl FileInput {
         }
         this
     }
+    pub fn choose(&self, failed: impl Fn(String) + 'static) {
+        let Some(window) = self.window() else { return };
+        let panel = NSOpenPanel::openPanel(self.mtm());
+        let selected = panel.clone();
+        let field = Weak::new(self);
+        let completed = RcBlock::new(move |response| {
+            if response == NSModalResponseAbort {
+                failed(tr!("Could not open the file picker.").into());
+            } else if response == NSModalResponseOK
+                && let Some(field) = field.load()
+                && let Some(path) = selected.URL().and_then(|url| url.path())
+            {
+                field.setStringValue(&path);
+                field.changed();
+            }
+        });
+        panel.beginSheetModalForWindow_completionHandler(&window, &completed);
+    }
+
     pub fn value(&self) -> String {
         self.stringValue().to_string()
     }

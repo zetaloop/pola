@@ -9,7 +9,9 @@ use objc2::{
     sel,
 };
 use objc2_app_kit::*;
-use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSIndexSet, NSObject, NSObjectProtocol, NSString, ns_string,
+};
 
 use super::{Delegate, profile, ui};
 use crate::config::Profile;
@@ -19,6 +21,7 @@ pub struct Ivars {
     profiles: RefCell<Vec<Profile>>,
     table: Retained<NSTableView>,
     pages: Retained<NSTabViewController>,
+    error: Retained<NSTextField>,
     editor: RefCell<Option<Retained<profile::Editor>>>,
 }
 
@@ -34,6 +37,43 @@ define_class!(
         #[unsafe(method(numberOfRowsInTableView:))]
         fn rows(&self, _table: &NSTableView) -> isize {
             self.ivars().profiles.borrow().len() as isize
+        }
+
+        #[unsafe(method_id(tableView:pasteboardWriterForRow:))]
+        fn pasteboard(&self, _table: &NSTableView, row: isize) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+            let item = NSPasteboardItem::new();
+            item.setString_forType(&NSString::from_str(&row.to_string()), ns_string!("io.github.zetaloop.pola.profile"));
+            Some(ProtocolObject::from_retained(item))
+        }
+
+        #[unsafe(method(tableView:validateDrop:proposedRow:proposedDropOperation:))]
+        fn validate_drop(&self, table: &NSTableView, info: &ProtocolObject<dyn NSDraggingInfo>, row: isize, _operation: NSTableViewDropOperation) -> NSDragOperation {
+            let local = info.draggingSource().and_then(|source| source.downcast::<NSTableView>().ok())
+                .is_some_and(|source| std::ptr::eq(&*source, table));
+            if local && row >= 0 && row as usize <= self.ivars().profiles.borrow().len() {
+                table.setDropRow_dropOperation(row, NSTableViewDropOperation::Above);
+                NSDragOperation::Move
+            } else { NSDragOperation::None }
+        }
+
+        #[unsafe(method(tableView:acceptDrop:row:dropOperation:))]
+        fn accept_drop(&self, _table: &NSTableView, info: &ProtocolObject<dyn NSDraggingInfo>, row: isize, _operation: NSTableViewDropOperation) -> bool {
+            if let Some(owner) = self.ivars().owner.load()
+                && let Some(index) = info.draggingPasteboard().stringForType(ns_string!("io.github.zetaloop.pola.profile"))
+                    .and_then(|value| value.to_string().parse::<usize>().ok())
+            {
+                let mut config = owner.config();
+                if row >= 0 && row as usize <= config.profiles.len() && index < config.profiles.len() {
+                    let target = row as usize - usize::from(index < row as usize);
+                    let profile = config.profiles.remove(index);
+                    let name = profile.name.clone();
+                    config.profiles.insert(target, profile);
+                    match owner.save_config(config) {
+                        Ok(()) => { self.select(&name); self.ivars().error.setStringValue(&NSString::new()); true }
+                        Err(error) => { self.ivars().error.setStringValue(&NSString::from_str(&error)); false }
+                    }
+                } else { false }
+            } else { false }
         }
     }
     unsafe impl NSTableViewDelegate for List {
@@ -68,11 +108,14 @@ impl List {
             .tabView()
             .setTabViewType(NSTabViewType::NoTabsNoBorder);
         pages.tabView().setDrawsBackground(false);
+        let error = NSTextField::wrappingLabelWithString(&NSString::new(), mtm);
+        error.setTextColor(Some(&NSColor::systemRedColor()));
         let this = Self::alloc(mtm).set_ivars(Ivars {
             owner: Weak::new(owner),
             profiles: RefCell::new(Vec::new()),
             table,
             pages,
+            error,
             editor: RefCell::new(None),
         });
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -86,6 +129,14 @@ impl List {
             this.ivars().table.setTarget(Some(&this));
             this.ivars().table.setAction(Some(sel!(editProfile:)));
         }
+        this.ivars()
+            .table
+            .registerForDraggedTypes(&NSArray::from_slice(&[ns_string!(
+                "io.github.zetaloop.pola.profile"
+            )]));
+        this.ivars()
+            .table
+            .setDraggingSourceOperationMask_forLocal(NSDragOperation::Move, true);
         let title = ui::heading(mtm, tr!("Configurations"));
         let scroll = NSScrollView::new(mtm);
         scroll.setHasVerticalScroller(true);
@@ -96,7 +147,18 @@ impl List {
             .constraintGreaterThanOrEqualToConstant(180.0)
             .setActive(true);
         let add = ui::button(mtm, tr!("New configuration"), &this, sel!(addProfile:));
-        let content = ui::stack(mtm, false, &[&title, &scroll, &add]);
+        let header = ui::stack(mtm, true, &[&title, &add]);
+        header.setDistribution(NSStackViewDistribution::EqualSpacing);
+        let content = ui::stack(mtm, false, &[&header, &scroll, &this.ivars().error]);
+        header
+            .widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
+        this.ivars()
+            .error
+            .widthAnchor()
+            .constraintEqualToAnchor(&content.widthAnchor())
+            .setActive(true);
         scroll
             .widthAnchor()
             .constraintEqualToAnchor(&content.widthAnchor())
@@ -130,6 +192,22 @@ impl List {
                 *self.ivars().profiles.borrow_mut() = profiles;
                 self.ivars().table.reloadData();
             }
+        }
+    }
+
+    pub fn select(&self, name: &str) {
+        let index = self
+            .ivars()
+            .profiles
+            .borrow()
+            .iter()
+            .position(|profile| profile.name == name);
+        if let Some(index) = index {
+            self.ivars().table.selectRowIndexes_byExtendingSelection(
+                &NSIndexSet::indexSetWithIndex(index),
+                false,
+            );
+            self.ivars().table.scrollRowToVisible(index as isize);
         }
     }
 
