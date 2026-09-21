@@ -24,12 +24,25 @@ const WEEKDAYS: [Weekday; 7] = [
 
 const DAY_NAMES: [&str; 7] = ["M", "T", "W", "T", "F", "S", "S"];
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Section {
+    General,
+    Schedule,
+    Profile(Mode),
+}
+
 #[derive(Clone)]
-pub(crate) struct SettingsInput(pub Rc<AppState>);
+pub(crate) struct SettingsInput {
+    pub state: Rc<AppState>,
+    pub config: Config,
+    pub section: Section,
+}
 
 impl PartialEq for SettingsInput {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.state, &other.state)
+            && self.config == other.config
+            && self.section == other.section
     }
 }
 
@@ -154,12 +167,12 @@ impl ProfileDraft {
 pub(crate) struct Settings {
     state: Rc<AppState>,
     draft: Draft,
+    saved: Config,
     status: String,
 }
 
 #[derive(Clone)]
 pub(crate) enum Message {
-    Activate,
     LaunchAtLogin(bool),
     ScheduleEnabled(bool),
     ApplyOnLaunch(bool),
@@ -185,28 +198,28 @@ impl Component for Settings {
     type Input = SettingsInput;
     type Message = Message;
 
-    fn create(input: &Self::Input, context: &ComponentContext<Self>) -> Self {
-        input
-            .0
-            .settings_opened(context.sender().callback(|()| Message::Activate));
+    fn create(input: &Self::Input, _context: &ComponentContext<Self>) -> Self {
         Self {
-            state: Rc::clone(&input.0),
-            draft: Draft::from_config(input.0.config(), input.0.launch_at_login()),
+            state: Rc::clone(&input.state),
+            draft: Draft::from_config(input.config.clone(), input.state.launch_at_login()),
+            saved: input.config.clone(),
             status: String::new(),
         }
     }
 
+    fn input_changed(&mut self, input: &Self::Input, _context: &ComponentContext<Self>) {
+        if self.saved != input.config {
+            self.draft = Draft::from_config(input.config.clone(), input.state.launch_at_login());
+            self.saved = input.config.clone();
+        }
+    }
+
     fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
-        if !matches!(&message, Message::Activate | Message::Save) {
+        if !matches!(&message, Message::Save) {
             self.status.clear();
         }
 
         match message {
-            Message::Activate => {
-                if !context.window().request_activate() {
-                    self.status = "Could not activate the settings window.".into();
-                }
-            }
             Message::LaunchAtLogin(value) => self.draft.launch_at_login = value,
             Message::ScheduleEnabled(value) => self.draft.schedule_enabled = value,
             Message::ApplyOnLaunch(value) => self.draft.apply_on_launch = value,
@@ -308,50 +321,20 @@ impl Component for Settings {
         }
     }
 
-    fn view(&self, _input: &Self::Input, context: &mut ViewContext<Self>) -> View {
-        context.window_visuals(
-            WindowVisuals::new()
-                .backdrop(WindowBackdrop::Mica)
-                .client_size(760.0, 620.0),
-        );
-
-        let tabs = TabView::new().is_add_tab_button_visible(false).tab_items([
-            KeyedView::new(
-                "general",
-                TabViewItem::new()
-                    .header("General")
-                    .is_closable(false)
-                    .content(self.general_view(context)),
-            ),
-            KeyedView::new(
-                "schedule",
-                TabViewItem::new()
-                    .header("Schedule")
-                    .is_closable(false)
-                    .content(self.schedule_view(context)),
-            ),
-            KeyedView::new(
-                "light",
-                TabViewItem::new()
-                    .header("Light")
-                    .is_closable(false)
-                    .content(self.profile_view(context, Mode::Light)),
-            ),
-            KeyedView::new(
-                "dark",
-                TabViewItem::new()
-                    .header("Dark")
-                    .is_closable(false)
-                    .content(self.profile_view(context, Mode::Dark)),
-            ),
-        ]);
-
-        context.window_frame(
-            "pola",
-            StackPanel::new().spacing(12.0).children((
-                tabs,
+    fn view(&self, input: &Self::Input, context: &mut ViewContext<Self>) -> View {
+        let content = match input.section {
+            Section::General => self.general_view(context),
+            Section::Schedule => self.schedule_view(context),
+            Section::Profile(mode) => self.profile_view(context, mode),
+        };
+        Grid::new()
+            .rows([GridLength::STAR, GridLength::Auto])
+            .children((
+                Border::new().content(content),
                 StackPanel::new()
+                    .grid_row(1)
                     .orientation(Orientation::Horizontal)
+                    .margin(20.0)
                     .spacing(12.0)
                     .children((
                         Button::new()
@@ -359,8 +342,7 @@ impl Component for Settings {
                             .content("Save"),
                         TextBlock::new().text(self.status.clone()),
                     )),
-            )),
-        )
+            ))
     }
 }
 
@@ -541,11 +523,5 @@ impl Settings {
                     .padding(Thickness::uniform(12.0))
                     .content(content),
             )
-    }
-}
-
-impl Drop for Settings {
-    fn drop(&mut self) {
-        self.state.settings_closed();
     }
 }

@@ -41,9 +41,10 @@ use crate::{
 };
 
 mod settings;
+mod window;
 
 const TIMER_ID: usize = 1;
-const SHOW_SETTINGS: u32 = WM_APP + 1;
+const SHOW_WINDOW: u32 = WM_APP + 1;
 const RUNTIME: windows::core::PCWSTR = w!("io.github.zetaloop.pola.runtime");
 const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
 const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -61,7 +62,7 @@ impl Drop for Instance {
 enum OpenWindow {
     Closed,
     Opening,
-    Open(Callback<()>),
+    Open(Callback<window::Event>),
 }
 
 pub(crate) struct AppState {
@@ -72,7 +73,7 @@ pub(crate) struct AppState {
     next: RefCell<Option<Event>>,
     icon: RefCell<Option<NotifyIcon>>,
     message_window: RefCell<Option<Window>>,
-    settings: RefCell<OpenWindow>,
+    window: RefCell<OpenWindow>,
     shortcut: RefCell<Shortcut>,
 }
 
@@ -86,7 +87,7 @@ impl AppState {
             next: RefCell::new(None),
             icon: RefCell::new(None),
             message_window: RefCell::new(None),
-            settings: RefCell::new(OpenWindow::Closed),
+            window: RefCell::new(OpenWindow::Closed),
             shortcut: RefCell::new(Shortcut::default()),
         })
     }
@@ -140,8 +141,8 @@ impl AppState {
             .on_message(move |_hwnd, message, wparam, _lparam| {
                 let state = state.upgrade()?;
                 match message {
-                    SHOW_SETTINGS => {
-                        state.open_settings();
+                    SHOW_WINDOW => {
+                        state.open_window();
                         Some(0)
                     }
                     WM_SETTINGCHANGE => {
@@ -182,8 +183,7 @@ impl AppState {
                     return;
                 };
                 match event {
-                    NotifyIconEvent::Activate { .. } => state.open_settings(),
-                    NotifyIconEvent::ContextMenu { position } => state.show_menu(position),
+                    NotifyIconEvent::Activate { .. } => state.open_window(),
                     NotifyIconEvent::Unavailable => {
                         show_error("Could not restore notification icon", "pola will exit.");
                         state.exit();
@@ -196,67 +196,9 @@ impl AppState {
         Ok(())
     }
 
-    fn show_menu(self: &Rc<Self>, position: windows_notifyicon::Point) {
-        let target = match self.system_mode() {
-            Ok(mode) => mode.toggle(),
-            Err(error) => {
-                show_error("Could not read appearance", &error);
-                return;
-            }
-        };
-        let toggle = format!("Switch to {target}");
-        let schedule = if self.config.borrow().schedule.enabled {
-            "Disable schedule"
-        } else {
-            "Enable schedule"
-        };
-        let next = self
-            .config
-            .borrow()
-            .schedule
-            .next(&Zoned::now())
-            .map(|event| format!("Next: {} → {}", event.at.strftime("%a %H:%M"), event.mode))
-            .unwrap_or_else(|| "Next: —".into());
-
-        let state = Rc::clone(self);
-        let toggle_action = toggle.clone();
-        let menu = Menu::new(
-            [
-                MenuItem::disabled("next", next),
-                MenuItem::separator("separator-1"),
-                MenuItem::item("toggle", toggle),
-                MenuItem::item("schedule", schedule),
-                MenuItem::separator("separator-2"),
-                MenuItem::item("settings", "Settings…"),
-                MenuItem::separator("separator-3"),
-                MenuItem::item("exit", "Quit"),
-            ],
-            move |label: String| {
-                if label == toggle_action {
-                    state.toggle();
-                } else if label == schedule {
-                    state.toggle_schedule();
-                } else {
-                    match label.as_str() {
-                        "Settings…" => state.open_settings(),
-                        "Quit" => state.exit(),
-                        _ => {}
-                    }
-                }
-            },
-        );
-
-        if let Err(error) = self
-            .app
-            .show_menu_at(ScreenPoint::new(position.x, position.y), menu)
-        {
-            show_error("Could not show menu", &error.to_string());
-        }
-    }
-
-    fn open_settings(self: &Rc<Self>) {
+    fn open_window(self: &Rc<Self>) {
         let activate = {
-            let mut window = self.settings.borrow_mut();
+            let mut window = self.window.borrow_mut();
             match &*window {
                 OpenWindow::Closed => {
                     *window = OpenWindow::Opening;
@@ -268,24 +210,37 @@ impl AppState {
         };
 
         if let Some(activate) = activate {
-            _ = activate.call(());
+            _ = activate.call(window::Event::Activate);
             return;
         }
 
-        if let Err(error) = self.app.open_window(View::component::<settings::Settings>(
-            settings::SettingsInput(Rc::clone(self)),
-        )) {
-            *self.settings.borrow_mut() = OpenWindow::Closed;
-            show_error("Could not open settings", &error.to_string());
+        if let Err(error) =
+            self.app
+                .open_window(View::component::<window::Main>(window::WindowInput(
+                    Rc::clone(self),
+                )))
+        {
+            *self.window.borrow_mut() = OpenWindow::Closed;
+            show_error("Could not open window", &error.to_string());
         }
     }
 
-    pub(crate) fn settings_opened(&self, activate: Callback<()>) {
-        *self.settings.borrow_mut() = OpenWindow::Open(activate);
+    pub(crate) fn window_opened(&self, activate: Callback<window::Event>) {
+        *self.window.borrow_mut() = OpenWindow::Open(activate);
     }
 
-    pub(crate) fn settings_closed(&self) {
-        *self.settings.borrow_mut() = OpenWindow::Closed;
+    pub(crate) fn window_closed(&self) {
+        *self.window.borrow_mut() = OpenWindow::Closed;
+    }
+
+    fn notify_window(&self) {
+        let callback = match &*self.window.borrow() {
+            OpenWindow::Open(callback) => Some(callback.clone()),
+            _ => None,
+        };
+        if let Some(callback) = callback {
+            _ = callback.call(window::Event::Changed);
+        }
     }
 
     fn exit(&self) {
@@ -299,19 +254,6 @@ impl AppState {
             Ok(mode) => self.select(mode.toggle()),
             Err(error) => show_error("Could not read appearance", &error),
         }
-        self.schedule_next();
-    }
-
-    fn toggle_schedule(&self) {
-        let mut config = self.config.borrow().clone();
-        config.schedule.enabled = !config.schedule.enabled;
-
-        if let Err(error) = config.save() {
-            show_error("Could not save settings", &error.to_string());
-            return;
-        }
-
-        *self.config.borrow_mut() = config;
         self.schedule_next();
     }
 
@@ -427,6 +369,7 @@ impl AppState {
         let profile = self.config.borrow().profile(mode).clone();
         self.apply_profile(&profile);
         self.applied.set(Some(mode));
+        self.notify_window();
     }
 
     fn apply_profile(&self, profile: &Profile) {
@@ -454,7 +397,7 @@ impl AppState {
     }
 
     fn schedule_fired(&self) {
-        if let Some(mode) = self.config.borrow().schedule.current(&Zoned::now()) {
+        if let Some(mode) = self.config().schedule.current(&Zoned::now()) {
             self.select(mode);
         }
         self.schedule_next();
@@ -463,6 +406,7 @@ impl AppState {
     fn schedule_next(&self) {
         let next = self.config.borrow().schedule.next(&Zoned::now());
         *self.next.borrow_mut() = next.clone();
+        self.notify_window();
 
         let window = self.message_window.borrow();
         let Some(window) = window.as_ref() else {
@@ -499,7 +443,7 @@ impl AppState {
             .as_ref()
             .is_some_and(|event| event.at.timestamp() <= now.timestamp());
 
-        if missed && let Some(mode) = self.config.borrow().schedule.current(&now) {
+        if missed && let Some(mode) = self.config().schedule.current(&now) {
             self.select(mode);
         }
         self.schedule_next();
@@ -583,7 +527,7 @@ fn instance() -> windows::core::Result<Option<Instance>> {
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
         let window = unsafe { FindWindowW(None, RUNTIME)? };
         unsafe {
-            PostMessageW(Some(window), SHOW_SETTINGS, WPARAM(0), LPARAM(0))?;
+            PostMessageW(Some(window), SHOW_WINDOW, WPARAM(0), LPARAM(0))?;
         }
         Ok(None)
     } else {

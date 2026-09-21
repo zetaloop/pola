@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::mode::Mode;
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct Schedule {
     pub enabled: bool,
@@ -85,7 +85,7 @@ impl Schedule {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Rule {
     pub days: Vec<Weekday>,
     pub time: Time,
