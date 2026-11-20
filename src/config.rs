@@ -1,12 +1,13 @@
-use std::{env, error::Error, fs, io, path::PathBuf};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::mode::Mode;
 
-pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub light: Profile,
@@ -14,22 +15,12 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load() -> Result<Self> {
-        let path = path()?;
+    pub fn load(path: &Path) -> Result<Self, String> {
         match fs::read_to_string(path) {
-            Ok(text) => Ok(toml::from_str(&text)?),
+            Ok(text) => toml::from_str(&text).map_err(|error| error.to_string()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error.to_string()),
         }
-    }
-
-    pub fn save(&self) -> Result<()> {
-        let path = path()?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, toml::to_string_pretty(self)?)?;
-        Ok(())
     }
 
     pub fn profile(&self, mode: Mode) -> &Profile {
@@ -38,45 +29,51 @@ impl Config {
             Mode::Dark => &self.dark,
         }
     }
-
-    pub fn profile_mut(&mut self, mode: Mode) -> &mut Profile {
-        match mode {
-            Mode::Light => &mut self.light,
-            Mode::Dark => &mut self.dark,
-        }
-    }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Profile {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub wallpaper: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<Command>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize)]
 pub struct Command {
-    pub program: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub program: PathBuf,
+    #[serde(default)]
     pub args: Vec<String>,
 }
 
-pub fn path() -> io::Result<PathBuf> {
-    #[cfg(target_os = "windows")]
-    let base =
-        env::var_os("LOCALAPPDATA").ok_or_else(|| io::Error::other("LOCALAPPDATA is not set"))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    #[cfg(target_os = "macos")]
-    let base = env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?;
+    #[test]
+    fn loads_appearance_profiles() {
+        let config: Config = toml::from_str(
+            r#"
+            [light]
+            wallpaper = "Wallpapers/Day.jpg"
+            commands = [{ program = "wallpaper64.exe", args = ["-control", "openProfile", "-profile", "Light"] }]
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    compile_error!("pola supports Windows and macOS");
+            [dark]
+            wallpaper = "Wallpapers/Night.jpg"
+            "#,
+        )
+        .unwrap();
 
-    #[cfg(target_os = "windows")]
-    return Ok(PathBuf::from(base).join("pola").join("config.toml"));
-
-    #[cfg(target_os = "macos")]
-    return Ok(PathBuf::from(base).join("Library/Application Support/pola/config.toml"));
+        assert_eq!(
+            config.light.wallpaper.as_deref(),
+            Some(Path::new("Wallpapers/Day.jpg"))
+        );
+        assert_eq!(
+            config.light.commands[0].args,
+            ["-control", "openProfile", "-profile", "Light"]
+        );
+        assert_eq!(
+            config.dark.wallpaper.as_deref(),
+            Some(Path::new("Wallpapers/Night.jpg"))
+        );
+    }
 }
